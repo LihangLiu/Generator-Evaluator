@@ -132,7 +132,7 @@ class RLUniRNN(BaseModel):
         return user_feature
 
     def item_decode(self, inputs, prev_hidden, output_type):
-        item_embedding = self._build_embeddings(inputs, self.item_slot_names)
+        item_embedding = self._build_embeddings(inputs, self.item_slot_names + ['pos'])
         item_fc = self.item_fc_op(item_embedding)
         if 'decode_len' in inputs:
             item_gru = self.custom_rnn(item_fc, h_0=prev_hidden, output_type=output_type, decode_len=inputs['decode_len'])

@@ -75,7 +75,7 @@ class DNN(BaseModel):
         return user_feature
 
     def item_decode(self, inputs, user_feature):
-        item_embedding = self._build_embeddings(inputs, self.item_slot_names)
+        item_embedding = self._build_embeddings(inputs, self.item_slot_names + ['pos'])
         item_fc = self.item_fc_op(item_embedding)
         concat_fc = layers.concat([item_fc, layers.sequence_expand_as(user_feature, item_fc)], 1)
         return concat_fc
@@ -112,7 +112,7 @@ class UniRNN(BaseModel):
     def _create_params(self):
         ### embed
         self.dict_data_embed_op = {}
-        list_names = self.item_slot_names + self.user_slot_names
+        list_names = self.item_slot_names + self.user_slot_names + ['pos']
         for name in list_names:
             vob_size = self.npz_config['embedding_size'][name] + 1
             self.dict_data_embed_op[name] = default_embedding([vob_size, self.embed_size], 'embed_' + name)
@@ -155,7 +155,7 @@ class UniRNN(BaseModel):
         return user_feature
 
     def item_decode(self, inputs, prev_hidden):
-        item_embedding = self._build_embeddings(inputs, self.item_slot_names)
+        item_embedding = self._build_embeddings(inputs, self.item_slot_names + ['pos'])
         item_fc = self.item_fc_op(item_embedding)
         item_gru = self.item_gru_op(item_fc, h_0=prev_hidden)
         return item_gru

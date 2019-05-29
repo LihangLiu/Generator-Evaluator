@@ -18,7 +18,6 @@ import parl.layers as layers
 from parl.framework.algorithm import Model
 
 from fluid_utils import fluid_batch_norm
-from utils import print_once
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s') # filename='hot_rl.log', 
 
@@ -112,9 +111,7 @@ def default_fc(size, num_flatten_dims=1, act=None, name=None):
 
 def default_embedding(size, name):
     gradient_clip = default_param_clip()
-    print_once('ERROR, no reg for debug')
-    # reg = fluid.regularizer.L2Decay(1e-5)   # IMPORTANT, to prevent overfitting.
-    reg = None
+    reg = fluid.regularizer.L2Decay(1e-5)   # IMPORTANT, to prevent overfitting.
     embed = layers.embedding(name=name,
                             size=size,
                             param_attr=ParamAttr(initializer=fluid.initializer.Xavier(),

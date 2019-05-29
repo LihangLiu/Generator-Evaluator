@@ -68,7 +68,7 @@ def get_parser():
                         help = "single: use the first gpu, parallel: use all gpus")
     parser.add_argument('--task', 
                         default = 'train', 
-                        choices = ['train', 'test', 'eval'],
+                        choices = ['train', 'test', 'eval', 'debug'],
                         type = str, 
                         help = "")
     
@@ -85,7 +85,7 @@ class SLFeedConvertor(object):
         for name in batch_data.conf.user_slot_names + batch_data.conf.item_slot_names:
             ft = batch_data.tensor_dict[name]
             feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)
-        pos = batch_data.pos().reshape([-1, 1])
+        pos = batch_data.pos().reshape([-1, 1]).astype('int64')
         feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
         click_id = batch_data.tensor_dict['click_id']
         feed_dict['click_id'] = create_tensor(click_id.values, lod=click_id.lod, place=place)
@@ -136,6 +136,9 @@ def main(args):
     if args.task == 'test':
         test(td_ct, args, conf, None, td_ct.ckp_step)
         exit()
+    elif args.task == 'debug':
+        debug(td_ct, args, conf, None, td_ct.ckp_step)
+        exit()
     elif args.task == 'eval':
         return td_ct
 
@@ -183,6 +186,11 @@ def test(td_ct, args, conf, summary_writer, epoch_id):
         batch_id += 1
 
     add_scalar_summary(summary_writer, epoch_id, 'test/auc', auc_metric.overall_auc())
+
+
+def debug(td_ct, args, conf, summary_writer, epoch_id):
+    pass
+
 
 
 if __name__ == "__main__":

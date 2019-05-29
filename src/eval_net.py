@@ -72,7 +72,7 @@ class BiRNN(BaseModel):
         user_embedding = self._build_embeddings(inputs, self.user_slot_names)
         user_feature = self.user_feature_fc_op(user_embedding)
         # item rnn
-        item_embedding = self._build_embeddings(inputs, self.item_slot_names)            
+        item_embedding = self._build_embeddings(inputs, self.item_slot_names + ['pos'])            
         item_fc = self.item_fc_op(item_embedding)
         item_gru_forward = self.item_gru_forward_op(item_fc, h_0=user_feature)
         item_gru_backward = self.item_gru_backward_op(item_fc, h_0=user_feature)
@@ -285,7 +285,7 @@ class Transformer(BaseModel):
         user_feature = self.user_feature_fc_op(user_embedding)
 
         # item decode
-        item_embedding = self._build_embeddings(inputs, self.item_slot_names)
+        item_embedding = self._build_embeddings(inputs, self.item_slot_names + ['pos'])
         item_fc = self.item_fc_op(item_embedding)
         input_embed = layers.concat([item_fc, layers.sequence_expand_as(user_feature, item_fc)], 1) # (batch*seq_lens, dim)
         seq_lens = fluid_sequence_get_seq_len(inputs[self.item_slot_names[0]])
