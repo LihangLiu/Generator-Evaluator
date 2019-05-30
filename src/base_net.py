@@ -146,6 +146,8 @@ class BaseModel(Model):
 
         self.hidden_size = 128
         self.embed_size = 16
+        self.SAFE_EPS = 1e-6
+        self.BIG_VALUE = 1e6
 
     def get_input_specs(self):
         """ignore"""
@@ -161,6 +163,8 @@ class BaseModel(Model):
     def _build_embeddings(self, inputs, list_names):
         list_embed = []
         for name in list_names:
+            # message = "%s %d" % (name, self.npz_config['embedding_size'][name])
+            # layers.Print(layers.reduce_max(inputs[name]), summarize=32, print_tensor_lod=False, message=message)
             c_embed = self.dict_data_embed_op[name](inputs[name])
             list_embed.append(c_embed)                              # (batch*seq_lens, 16)
         concated_embed = layers.concat(input=list_embed, axis=1)    # (batch*seq_lens, concat_dim)

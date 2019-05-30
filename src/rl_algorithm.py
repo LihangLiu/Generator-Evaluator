@@ -117,6 +117,15 @@ class RLAlgorithm(Algorithm):
         fetch_dict['c_Q'] = c_Q
         return {'fetch_dict': fetch_dict}
 
+    def sampling(self):
+        """test"""
+        inputs = self.model.create_inputs(mode='train')
+        sampled_id = self.model.forward(inputs, output_type='sampled_id')
+
+        fetch_dict = OrderedDict()
+        fetch_dict['sampled_id'] = sampled_id
+        return {'fetch_dict': fetch_dict}
+
     def before_every_batch(self):
         """
         TODO: memory leak caused by np.array(var.get_tensor()) within _fetch_var() 

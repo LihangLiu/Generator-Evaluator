@@ -250,59 +250,53 @@ def fluid_batch_norm(input,
 
     return helper.append_activation(batch_norm_out)
 
-# def fluid_sequence_gather(input, index, offset):
+
+# def fluid_sequence_scatter(input, index, offset, updates):
 #     """
 #     args:
 #         input: 1-level LoDTensor, 'float32' only
 #         index: 1-d tensor of the sequence index, 'int32' only
 #         offset: the same shape and dtype as index
+#         updates: (len(index), input[1:])
 #     return:
-#         input.to_tensor()[index + offset]
+#         output = input
+#         output[index + offset] = updates
+#         lod_set(output, input)
 #     """
 #     # assert input.lod_level == 1, input
 #     assert index.shape == offset.shape
+#     assert input.shape[1:] == updates.shape[1:]
 #     new_index = index + offset
 #     new_index.stop_gradient = True
-#     output = layers.gather(input, new_index)
-#     return output
+#     output = layers.scatter(input, new_index, updates)
+#     return layers.lod_reset(output, input)
 
-def fluid_sequence_scatter(input, index, offset, updates):
+
+def fluid_sequence_scatter(input, index, value):
     """
     args:
-        input: 1-level LoDTensor, 'float32' only
-        index: 1-d tensor of the sequence index, 'int32' only
-        offset: the same shape and dtype as index
-        updates: (len(index), input[1:])
+        input: 1-level LoDTensor
+        index: 1-d tensor of the sequence index
+        value: scalar
     return:
         output = input
         output[index + offset] = updates
         lod_set(output, input)
     """
-    # assert input.lod_level == 1, input
-    assert index.shape == offset.shape
-    assert input.shape[1:] == updates.shape[1:]
-    new_index = index + offset
-    new_index.stop_gradient = True
-    output = layers.scatter(input, new_index, updates)
+    offset = fluid_sequence_get_offset(input)
+    offset_index = index + offset
+    offset_index.stop_gradient = True
+    updates = fluid.layers.fill_constant_batch_size_like(input, shape=input.shape, value=value, dtype=input.dtype)
+    output = layers.scatter(input, layers.cast(offset_index, 'int32'), updates)
     return layers.lod_reset(output, input)
 
-# def fluid_get_offset(seq_len):
-#     """
-#     args:
-#         seq_len: (-1)
-#     return:
-#         offset: the same shape as seq_len,
-#             [0] + cumsum(seq_len)[:-1]
-#     """
-#     assert len(seq_len.shape) == 1
-#     csum = layers.cumsum(seq_len)
-#     zero = layers.fill_constant(shape=[1], dtype=seq_len.dtype, value=0)
-#     offset = layers.concat([zero, csum], axis=0, name='offset_concat')
-#     offset = layers.slice(offset, axes=[0], starts=[0], ends=[-1], name='offset_slice')
-#     offset = layers.reshape(offset, shape=[-1], name='offset_reshape')
-#     return offset
 
-def fluid_get_offset2(seq_len):
+def fluid_sequence_get_offset(input):
+    seq_len = fluid_sequence_get_seq_len(input)
+    offset = fluid_get_offset(layers.reshape(seq_len, [-1]))
+    return offset
+
+def fluid_get_offset(seq_len):
     """
     args:
         seq_len: (-1)
@@ -311,42 +305,8 @@ def fluid_get_offset2(seq_len):
             cumsum(seq_len) - seq_len 
     """
     assert len(seq_len.shape) == 1
-    csum = layers.cumsum(seq_len)
-    offset = csum - seq_len
-    return offset
-
-# def fluid_sequence_delay1(input, assist_index, OOV):
-#     """
-#     args:
-#         input: 1-level LoDTensor
-#         assist_index: 1-d tensor of the flattened index
-#     return:
-        
-#     """
-#     # assert input.lod_level == 1, input
-#     zero = layers.fill_constant(shape=(1,) + input.shape[1:], dtype=input.dtype, value=OOV)
-#     input_padded = layers.concat([input, zero], axis=0)
-#     assist_index.stop_gradient = True
-#     output = layers.gather(input_padded, assist_index)
-#     output = layers.lod_reset(output, input)
-#     return output
-
-def fluid_sequence_delay2(input, seq_len, OOV):
-    """
-    args:
-        input: 1-level LoDTensor
-        seq_len: 1-
-    return:
-        
-    """
-    oov = layers.cast(seq_len*0 + OOV, input.dtype)
-    oov.stop_gradient = True
-    input_padded = layers.sequence_concat([input, oov])
-    offset = layers.fill_constant_batch_size_like(seq_len, shape=[-1,1], value=1, dtype='int64')
-    output = layers.sequence_slice(input_padded,
-                                        offset,
-                                        layers.cast(seq_len, 'int64'))
-    return output
+    csum = layers.cumsum(layers.cast(seq_len, 'float32'), exclusive=True)
+    return layers.cast(csum, 'int64')
 
 
 def fluid_sequence_delay(input, OOV):
@@ -417,7 +377,7 @@ def fluid_sequence_get_pos(lodtensor):
              data = [0,1,2,3,0,1,3]
              shape = [-1, 1]
     """
-    lodtensor = layers.slice(lodtensor, axes=[1], starts=[0], ends=[1])
+    lodtensor = layers.reduce_sum(lodtensor, dim=1, keep_dim=True) 
     assert lodtensor.shape == (-1, 1), (lodtensor.shape())
     ones = layers.cast(lodtensor * 0 + 1, 'float32')        # (batch*seq_len, 1)
     ones_padded = fluid_sequence_pad(ones, 0)               # (batch, max_seq_len, 1)
@@ -428,22 +388,37 @@ def fluid_sequence_get_pos(lodtensor):
     return pos
 
 
-def fluid_sequence_get_seq_len(lodtensor):
+# def fluid_sequence_get_seq_len(lodtensor):
+#     """
+#     args:
+#         lodtensor: lod = [[0,4,7]]
+#     return:
+#         seq_len: lod = []
+#              data = [4, 3]
+#              shape = [-1, 1]
+#     """
+#     lodtensor = layers.slice(lodtensor, axes=[1], starts=[0], ends=[1])
+#     assert lodtensor.shape == (-1, 1), (lodtensor.shape())
+#     ones = layers.cast(lodtensor * 0 + 1, 'float32')        # (batch*seq_len, 1)
+#     ones_padded = fluid_sequence_pad(ones, 0)               # (batch, max_seq_len, 1)
+#     ones_padded = layers.squeeze(ones_padded, [2])          # (batch, max_seq_len)
+#     seq_len = layers.cast(layers.reduce_sum(ones_padded, 1, keep_dim=True), 'int64')    # (batch, 1)
+#     return seq_len
+
+
+def fluid_sequence_get_seq_len(input):
     """
     args:
-        lodtensor: lod = [[0,4,7]]
+        input: lod = [[0,4,7]]
     return:
         seq_len: lod = []
              data = [4, 3]
              shape = [-1, 1]
     """
-    lodtensor = layers.slice(lodtensor, axes=[1], starts=[0], ends=[1])
-    assert lodtensor.shape == (-1, 1), (lodtensor.shape())
-    ones = layers.cast(lodtensor * 0 + 1, 'float32')        # (batch*seq_len, 1)
-    ones_padded = fluid_sequence_pad(ones, 0)               # (batch, max_seq_len, 1)
-    ones_padded = layers.squeeze(ones_padded, [2])          # (batch, max_seq_len)
-    seq_len = layers.cast(layers.reduce_sum(ones_padded, 1, keep_dim=True), 'int64')    # (batch, 1)
+    zero = layers.cast(fluid.layers.assign(input=np.array([0], 'float32')), input.dtype)
+    input_padded, seq_len = layers.sequence_pad(input, zero)
     return seq_len
+
 
 def fluid_sequence_first_step(lodtensor):
     """
@@ -453,6 +428,16 @@ def fluid_sequence_first_step(lodtensor):
     length = layers.fill_constant_batch_size_like(lodtensor, shape=[-1,1], value=1, dtype='int64')
     res = layers.sequence_slice(lodtensor, offset=offset, length=length)
     return res
+
+
+def fluid_sequence_index(input, index):
+    """
+    index: (batch_size, 1)
+    """
+    ones = layers.fill_constant_batch_size_like(input, shape=[-1,1], value=1, dtype='int64')
+    output = layers.sequence_slice(input, offset=index, length=ones)
+    return output
+
 
 def get_num_devices(use_cuda):
     if use_cuda:

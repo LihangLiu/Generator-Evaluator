@@ -32,7 +32,6 @@ import tensorflow as tf
 
 import paddle
 from paddle import fluid
-import paddle.fluid.profiler as profiler
 
 from config import Config
 from utils import (sequence_unconcat, sequence_expand, sequence_gather, sequence_sampling, 
@@ -85,6 +84,7 @@ class SLFeedConvertor(object):
         for name in batch_data.conf.user_slot_names + batch_data.conf.item_slot_names:
             ft = batch_data.tensor_dict[name]
             feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)
+
         pos = batch_data.pos().reshape([-1, 1]).astype('int64')
         feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
         click_id = batch_data.tensor_dict['click_id']
@@ -98,6 +98,7 @@ class SLFeedConvertor(object):
         for name in batch_data.conf.user_slot_names + batch_data.conf.item_slot_names:
             ft = batch_data.tensor_dict[name]
             feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)
+            
         pos = batch_data.pos().reshape([-1, 1])
         feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
         return feed_dict
