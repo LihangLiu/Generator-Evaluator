@@ -74,13 +74,15 @@ class RLUniRNN(BaseModel):
     def custom_rnn(self, item_fc, h_0, decode_len=None, output_type=''):
         drnn = fluid.layers.DynamicRNN()
         pos = fluid_sequence_get_pos(item_fc)
-        if decode_len is None:
-            decode_ref_fc = item_fc
+        if not decode_len is None:
+            decode_item_fc = layers.sequence_unpad(fluid_sequence_pad(item_fc, 0), decode_len)
         else:
-            decode_ref_fc = layers.sequence_unpad(fluid_sequence_pad(item_fc, 0), decode_len)
+            decode_item_fc = item_fc
+
         with drnn.block():
-            _ = drnn.step_input(decode_ref_fc)      # to decide decode steps only
-            cur_item_fc = drnn.step_input(item_fc)
+            cur_item_fc = drnn.step_input(decode_item_fc)
+
+            # cur_item_fc = drnn.step_input(item_fc)
             cur_h_0 = drnn.memory(init=h_0, need_reorder=True)
             item_fc = drnn.static_input(item_fc)
             pos = drnn.static_input(pos)
@@ -145,8 +147,16 @@ class RLUniRNN(BaseModel):
     def forward(self, inputs, output_type):
         """forward"""
         assert output_type in ['c_Q', 'max_Q'], (output_type)
+
+        # DEBUG
+        for name in self.item_slot_names + self.user_slot_names + ['pos']:
+            message = "%s %d" % (name, self.npz_config['embedding_size'][name])
+            layers.Print(layers.reduce_max(inputs[name]), summarize=32, print_tensor_lod=False, message=message)
+
         user_feature = self.user_encode(inputs)
+        layers.Print(user_feature, summarize=32, print_tensor_lod=False, message='===== user_feature ==')
         item_Q = self.item_decode(inputs, user_feature, output_type)
+        layers.Print(item_Q, summarize=32, print_tensor_lod=False, message='===== item_Q ==')
         return item_Q
 
     def infer_init(self, inputs):

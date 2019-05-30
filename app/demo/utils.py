@@ -188,14 +188,34 @@ class BatchData(object):
             values = np.concatenate([self.tensor_dict[name].values, other_batch_data.tensor_dict[name].values], 0)
             self.tensor_dict[name] = FakeTensor(values[global_item_indice], seq_lens)
 
-    def get_candidates(self, pre_items):
+    # def get_candidates(self, pre_items):
+    #     """
+    #     return:
+    #         candidate_items: len() = batch_size, e.g. [[2,3,5], [], [3,4], ...]
+    #     """
+    #     res = []
+    #     for pre, dec_len, seq_len in zip(pre_items, self.decode_len(), self.seq_lens()):
+    #         if len(pre) >= dec_len:
+    #             res.append([])
+    #         else:
+    #             full = np.arange(seq_len)
+    #             res.append(np.setdiff1d(full, pre))
+    #     return res
+
+    def get_candidates(self, pre_items, stop_flags=None):
         """
+        pre_items: len() = batch_size
+        stop_flags: (batch_size,)
         return:
-            candidate_items: len() = batch_size, e.g. [[2,3,5], [], [3,4], ...]
+            candidate_items: len() = batch_size, e.g. [[2,3,5], [3,4], ...]
         """
+        if stop_flags is None:
+            stop_flags = np.zeros([len(pre_items)])
+        AssertEqual(len(pre_items), len(stop_flags))
+
         res = []
-        for pre, dec_len, seq_len in zip(pre_items, self.decode_len(), self.seq_lens()):
-            if len(pre) >= dec_len:
+        for pre, seq_len, stop in zip(pre_items, self.seq_lens(), stop_flags):
+            if stop:
                 res.append([])
             else:
                 full = np.arange(seq_len)
@@ -204,7 +224,7 @@ class BatchData(object):
 
     def get_reordered(self, order):
         """
-        reorder item-level features
+        get item-level features by order
         click_id will be removed
         """
         AssertEqual(len(order), self.batch_size())
@@ -221,4 +241,15 @@ class BatchData(object):
             new_batch_data.tensor_dict[name] = FakeTensor(values[global_item_indice], new_seq_lens)
         del new_batch_data.tensor_dict['click_id']
         return new_batch_data
+
+    def get_reordered_keep_candidate(self, order):
+        """
+        get item-level features by order + rest_items
+        click_id will be removed
+        """
+        rest_items = self.get_candidates(order)
+        new_order = [np.append(od, ri) for od, ri in zip(order, rest_items)]
+        return self.get_reordered(new_order)
+
+
 
