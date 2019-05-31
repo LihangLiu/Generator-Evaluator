@@ -128,8 +128,6 @@ class RLFeedConvertor(object):
             ft = batch_data.tensor_dict[name]
             feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)
 
-        # pos = batch_data.pos().reshape([-1, 1]).astype('int64')
-        # feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
         decode_len = batch_data.decode_len().reshape([-1, 1]).astype('int64')
         lod = [seq_len_2_lod([1] * len(decode_len))]
         feed_dict['decode_len'] = create_tensor(decode_len, lod=lod, place=place)
@@ -139,15 +137,13 @@ class RLFeedConvertor(object):
         return feed_dict
 
     @staticmethod
-    def inference(batch_data):
+    def sampling(batch_data):
         place = fluid.CPUPlace()
         feed_dict = {}
         for name in batch_data.conf.user_slot_names + batch_data.conf.item_slot_names:
             ft = batch_data.tensor_dict[name]
             feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)
 
-        # pos = batch_data.pos().reshape([-1, 1]).astype('int64')
-        # feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
         decode_len = batch_data.decode_len().reshape([-1, 1]).astype('int64')
         lod = [seq_len_2_lod([1] * len(decode_len))]
         feed_dict['decode_len'] = create_tensor(decode_len, lod=lod, place=place)
@@ -223,109 +219,86 @@ def inference(td_ct, batch_data):
 
 
 def train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id):
-    """train for conf.train_interval steps"""
+    """train"""
     dataset = NpzDataset(conf.train_npz_list, conf.npz_config_path, conf.requested_npz_names, if_random_shuffle=True)
     data_gen = dataset.get_data_generator(conf.batch_size)
 
+    list_reward = []
     list_loss = []
-    list_steps = range(5)
-    dict_c_Q = {s:[] for s in list_steps}
+    list_first_Q = []
+    guessed_batch_num = 11500
     batch_id = 0
     last_batch_data = BatchData(conf, data_gen.next())
     for tensor_dict in data_gen:
         ### sampling
-        tik()
         batch_data = BatchData(conf, tensor_dict)
         batch_data.set_decode_len(batch_data.seq_lens())
+        batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
 
-        # DEBUG
-        # batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
-        tok('expand_candidates')
-
-        tik()
-        fetch_dict = td_ct.inference(RLFeedConvertor.inference(batch_data))
+        fetch_dict = td_ct.sampling(RLFeedConvertor.sampling(batch_data))
         sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
         order = sequence_unconcat(sampled_id, batch_data.decode_len())
-        print('sampled_id', sampled_id.shape)
-        print('order', order[:2])
-        tok('fluid sampling')
-
-        # tik()
-        # order = inference(td_ct, batch_data)
-        # print('order', order[:2])
-        # tok('sampling')
 
         ### get reward
-        tik()
         reordered_batch_data = batch_data.get_reordered(order)
         fetch_dict = eval_td_ct.inference(SLFeedConvertor.inference(reordered_batch_data))
         reward = np.array(fetch_dict['click_prob'])[:, 1]
-        print('reward', reward.shape)
-        tok('get reward')
 
         ### save to replay_memory
-        tik()
         reordered_batch_data2 = batch_data.get_reordered_keep_candidate(order)
         reordered_batch_data2.set_decode_len(batch_data.decode_len())
         replay_memory.append((reordered_batch_data2, reward))
-        tok('replay memory')
 
         ### train
-        tik()
         memory_batch_data, reward = replay_memory[np.random.randint(len(replay_memory))]
         feed_dict = RLFeedConvertor.train_test(memory_batch_data, reward)
         fetch_dict = td_ct.train(feed_dict)
-        tok('train')
 
         ### logging
+        list_reward.append(np.mean(reward))
         list_loss.append(np.array(fetch_dict['loss']))
-        c_Q = np.array(fetch_dict['c_Q'])
-        start_index = np.array(fetch_dict['c_Q'].lod()[0][:-1])
-        for s in list_steps:
-            dict_c_Q[s].append(np.mean(c_Q[start_index + s]))
-        if batch_id % conf.prt_interval == 0:
-            logging.info('train/loss %f' % np.mean(list_loss))
-            for s in list_steps:
-                logging.info('train/c_Q_%d %f' % (s, np.mean(dict_c_Q[s])))
+        list_first_Q.append(np.mean(np.array(fetch_dict['c_Q'])[0]))
+        if batch_id % 10 == 0:
+            global_batch_id = epoch_id * guessed_batch_num + batch_id
+            add_scalar_summary(summary_writer, global_batch_id, 'train/rl_reward', np.mean(list_reward))
+            add_scalar_summary(summary_writer, global_batch_id, 'train/rl_loss', np.mean(list_loss))
+            add_scalar_summary(summary_writer, global_batch_id, 'train/rl_1st_Q', np.mean(list_first_Q))
+            list_reward = []
             list_loss = []
-            dict_c_Q = {s:[] for s in list_steps}
+            list_first_Q = []
 
         last_batch_data = BatchData(conf, tensor_dict)
         batch_id += 1
 
 
 def test(td_ct, args, conf, summary_writer, epoch_id):
-    """eval auc on the full test dataset"""
-    dataset = NpzDataset(args.test_npz_list, 
-                        conf.npz_config_path, 
-                        conf.requested_npz_names,
-                        if_random_shuffle=False)
-    data_manager = DataManager(conf, dataset, conf.batch_size)
+    """test"""
+    dataset = NpzDataset(conf.test_npz_list, conf.npz_config_path, conf.requested_npz_names, if_random_shuffle=False)
+    data_gen = dataset.get_data_generator(conf.batch_size)
 
-    list_loss = []
-    list_steps = range(5)
-    dict_c_Q = {s:[] for s in list_steps}
-    batch_id = 0
-    while True:
-        list_batch_data, list_feed_dict = data_manager.forward()
-        if list_batch_data is None:
-            break
-        fetch_dict = td_ct.test(list_feed_dict)
+    list_reward = []
+    last_batch_data = BatchData(conf, data_gen.next())
+    for tensor_dict in data_gen:
+        ### sampling
+        batch_data = BatchData(conf, tensor_dict)
+        batch_data.set_decode_len(batch_data.seq_lens())
+        batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
+
+        fetch_dict = td_ct.sampling(RLFeedConvertor.sampling(batch_data))
+        sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
+        order = sequence_unconcat(sampled_id, batch_data.decode_len())
+
+        ### get reward
+        reordered_batch_data = batch_data.get_reordered(order)
+        fetch_dict = eval_td_ct.inference(SLFeedConvertor.inference(reordered_batch_data))
+        reward = np.array(fetch_dict['click_prob'])[:, 1]
 
         ### logging
-        list_loss.append(np.array(fetch_dict['loss']))
-        c_Q = np.array(fetch_dict['c_Q'])
-        start_index = np.array(fetch_dict['c_Q'].lod()[0][:-1])
-        for s in list_steps:
-            dict_c_Q[s].append(np.mean(c_Q[start_index + s]))
+        list_reward.append(np.mean(reward))
 
-        if batch_id % 100 == 0:
-            logging.info('%d loss = %.5f' % (batch_id, np.mean(list_loss)))
-        batch_id += 1
+        last_batch_data = BatchData(conf, tensor_dict)
 
-    add_scalar_summary(summary_writer, epoch_id, 'test/loss', np.mean(list_loss))
-    for s in list_steps:
-        add_scalar_summary(summary_writer, epoch_id, 'test/c_Q_%d' % s, np.mean(dict_c_Q[s]))
+    add_scalar_summary(summary_writer, global_batch_id, 'train/rl_reward', np.mean(list_reward))
 
 
 def eval_list(td_ct, args, conf, npz_list):

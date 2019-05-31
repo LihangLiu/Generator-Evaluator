@@ -92,6 +92,15 @@ class RLAlgorithm(Algorithm):
     def inference(self):
         """inference"""
         inputs = self.model.create_inputs(mode='inference')
+        c_Q = self.model.forward(inputs, output_type='c_Q')
+
+        fetch_dict = OrderedDict()
+        fetch_dict['c_Q'] = c_Q
+        return {'fetch_dict': fetch_dict}
+
+    def sampling(self):
+        """sampling"""
+        inputs = self.model.create_inputs(mode='inference')
         sampled_id = self.model.forward(inputs, output_type='sampled_id')
 
         fetch_dict = OrderedDict()
