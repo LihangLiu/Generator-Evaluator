@@ -92,34 +92,6 @@ class RLAlgorithm(Algorithm):
     def inference(self):
         """inference"""
         inputs = self.model.create_inputs(mode='inference')
-        c_Q = self.model.forward(inputs, output_type='c_Q')
-
-        fetch_dict = OrderedDict()
-        fetch_dict['c_Q'] = c_Q
-        return {'fetch_dict': fetch_dict}
-
-    def infer_init(self):
-        """inference only the init part"""
-        inputs = self.model.create_inputs(mode='infer_init')
-        user_feature = self.model.infer_init(inputs)
-
-        fetch_dict = OrderedDict()
-        fetch_dict['init_hidden'] = user_feature
-        return {'fetch_dict': fetch_dict}
-
-    def infer_onestep(self):
-        """inference the gru-unit by one step"""
-        inputs = self.model.create_inputs(mode='infer_onestep')
-        next_hidden, c_Q = self.model.infer_onestep(inputs)
-
-        fetch_dict = OrderedDict()
-        fetch_dict['next_hidden'] = next_hidden
-        fetch_dict['c_Q'] = c_Q
-        return {'fetch_dict': fetch_dict}
-
-    def sampling(self):
-        """test"""
-        inputs = self.model.create_inputs(mode='train')
         sampled_id = self.model.forward(inputs, output_type='sampled_id')
 
         fetch_dict = OrderedDict()

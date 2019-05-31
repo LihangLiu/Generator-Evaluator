@@ -385,6 +385,7 @@ def fluid_sequence_get_pos(lodtensor):
     seq_len = layers.cast(layers.reduce_sum(ones_padded, 1, keep_dim=True), 'int64')    # (batch, 1)
     pos = layers.cast(layers.cumsum(ones_padded, 1, exclusive=True), 'int64')
     pos = layers.sequence_unpad(pos, seq_len)               # (batch*seq_len, 1)
+    pos.stop_gradient = True
     return pos
 
 

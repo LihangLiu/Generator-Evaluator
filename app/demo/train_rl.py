@@ -128,8 +128,8 @@ class RLFeedConvertor(object):
             ft = batch_data.tensor_dict[name]
             feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)
 
-        pos = batch_data.pos().reshape([-1, 1]).astype('int64')
-        feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
+        # pos = batch_data.pos().reshape([-1, 1]).astype('int64')
+        # feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
         decode_len = batch_data.decode_len().reshape([-1, 1]).astype('int64')
         lod = [seq_len_2_lod([1] * len(decode_len))]
         feed_dict['decode_len'] = create_tensor(decode_len, lod=lod, place=place)
@@ -139,15 +139,15 @@ class RLFeedConvertor(object):
         return feed_dict
 
     @staticmethod
-    def sampling(batch_data):
+    def inference(batch_data):
         place = fluid.CPUPlace()
         feed_dict = {}
         for name in batch_data.conf.user_slot_names + batch_data.conf.item_slot_names:
             ft = batch_data.tensor_dict[name]
             feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)
 
-        pos = batch_data.pos().reshape([-1, 1]).astype('int64')
-        feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
+        # pos = batch_data.pos().reshape([-1, 1]).astype('int64')
+        # feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
         decode_len = batch_data.decode_len().reshape([-1, 1]).astype('int64')
         lod = [seq_len_2_lod([1] * len(decode_len))]
         feed_dict['decode_len'] = create_tensor(decode_len, lod=lod, place=place)
@@ -237,26 +237,30 @@ def train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id
         tik()
         batch_data = BatchData(conf, tensor_dict)
         batch_data.set_decode_len(batch_data.seq_lens())
-        batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
+
+        # DEBUG
+        # batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
         tok('expand_candidates')
 
         tik()
-        fetch_dict = td_ct.sampling(RLFeedConvertor.sampling(batch_data))
+        fetch_dict = td_ct.inference(RLFeedConvertor.inference(batch_data))
         sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
         order = sequence_unconcat(sampled_id, batch_data.decode_len())
+        print('sampled_id', sampled_id.shape)
         print('order', order[:2])
         tok('fluid sampling')
 
-        tik()
-        order = inference(td_ct, batch_data)
-        print('order', order[:2])
-        tok('sampling')
+        # tik()
+        # order = inference(td_ct, batch_data)
+        # print('order', order[:2])
+        # tok('sampling')
 
         ### get reward
         tik()
         reordered_batch_data = batch_data.get_reordered(order)
         fetch_dict = eval_td_ct.inference(SLFeedConvertor.inference(reordered_batch_data))
         reward = np.array(fetch_dict['click_prob'])[:, 1]
+        print('reward', reward.shape)
         tok('get reward')
 
         ### save to replay_memory

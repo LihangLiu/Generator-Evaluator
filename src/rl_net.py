@@ -40,7 +40,8 @@ class RLUniRNN(BaseModel):
 
         self.user_feature_fc_op = default_fc(self.hidden_size, act='relu', name='user_feature_fc')
 
-        self.item_fc_op = default_fc(self.hidden_size * 3, act='relu', name='item_fc')
+        self.item_fc_op = default_fc(self.hidden_size, act='relu', name='item_fc')
+        self.item_gru_fc_op = default_fc(self.hidden_size * 3, act='relu', name='item_gru_fc')
         self.item_gru_op = default_drnn(self.hidden_size, name='item_gru')
 
         self.out_Q_fc1_op = default_fc(self.hidden_size, act='relu', name='out_Q_fc1')
@@ -50,19 +51,13 @@ class RLUniRNN(BaseModel):
         """create layers.data here"""
         inputs = OrderedDict()
         data_attributes = copy.deepcopy(self.data_attributes)
-        data_attributes['pos'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
         data_attributes['decode_len'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
         data_attributes['reward'] = {'shape': (-1, 1), 'dtype': 'float32', 'lod_level': 1}
-        data_attributes['prev_hidden'] = {'shape': (-1, self.hidden_size), 'dtype': 'float32', 'lod_level': 1}
 
         if mode in ['train', 'test']:
-            list_names = self.item_slot_names + self.user_slot_names + ['pos', 'decode_len', 'reward']
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'reward']
         elif mode in ['inference']:
-            list_names = self.item_slot_names + self.user_slot_names + ['pos', 'decode_len']
-        elif mode == 'infer_init':
-            list_names = self.user_slot_names
-        elif mode == 'infer_onestep':
-            list_names = self.item_slot_names + ['pos', 'prev_hidden']
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len']
         else:
             raise NotImplementedError(mode)
             
@@ -71,22 +66,27 @@ class RLUniRNN(BaseModel):
             inputs[name] = layers.data(name=name, shape=p['shape'], dtype=p['dtype'], lod_level=p['lod_level'])
         return inputs
 
-    def custom_rnn(self, item_fc, h_0, decode_len=None, output_type=''):
-        def get_decode_item_fc(item_fc, decode_len):
-            zeros = layers.fill_constant_batch_size_like(item_fc, shape=[-1,1], value=0, dtype='int64')
-            decode_item_fc = layers.sequence_slice(item_fc, offset=zeros, length=decode_len)
-            return decode_item_fc
+    def _cut_by_decode_len(self, input, decode_len):
+        zeros = layers.fill_constant_batch_size_like(input, shape=[-1,1], value=0, dtype='int64')
+        output = layers.sequence_slice(layers.cast(input, 'float32'), offset=zeros, length=decode_len)
+        return layers.cast(output, input.dtype)
 
-        pos = fluid_sequence_get_pos(item_fc)
-        decode_item_fc = item_fc if decode_len is None else get_decode_item_fc(item_fc, decode_len)
+    def train_rnn(self, item_fc, h_0, output_type=''):
+        pos = fluid_sequence_get_pos(item_fc)                       # (b*seq_len, 1)
+        pos_embed = self.dict_data_embed_op['pos'](pos)             # (b*seq_len, dim)
 
         drnn = fluid.layers.DynamicRNN()
         with drnn.block():
-            cur_item_fc = drnn.step_input(decode_item_fc)
+            cur_item_fc = drnn.step_input(item_fc)
+            cur_pos_embed = drnn.step_input(pos_embed)
             cur_h_0 = drnn.memory(init=h_0, need_reorder=True)
 
+            # step_input will remove lod info
             cur_item_fc = layers.lod_reset(cur_item_fc, cur_h_0)
-            next_h_0 = self.item_gru_op(cur_item_fc, h_0=cur_h_0)
+            cur_pos_embed = layers.lod_reset(cur_pos_embed, cur_h_0)
+
+            gru_input = self.item_gru_fc_op(layers.concat([cur_item_fc, cur_pos_embed], 1))
+            next_h_0 = self.item_gru_op(gru_input, h_0=cur_h_0)
 
             if output_type == 'c_Q':
                 Q = self.out_Q_fc2_op(self.out_Q_fc1_op(next_h_0))
@@ -94,30 +94,24 @@ class RLUniRNN(BaseModel):
 
             elif output_type == 'max_Q':
                 # e.g. batch_size = 2
-                # item_fc: lod = [0,4,7]
                 # cur_h_0: lod = [0,1,2]
-                item_fc = drnn.static_input(item_fc)
-                pos = drnn.static_input(pos)
-                cur_step = drnn.memory(shape=[1], dtype='int64', value=0)
+                cur_pos = drnn.step_input(pos)
+                pos = drnn.static_input(pos)            # lod = [0,4,7]
+                item_fc = drnn.static_input(item_fc)    # lod = [0,4,7]
 
                 expand_h_0 = layers.sequence_expand(cur_h_0, item_fc)               # lod = [0,1,2,3,4,5,6,7]
-                new_item_fc = layers.lod_reset(item_fc, expand_h_0)                 # lod = [0,1,2,3,4,5,6,7]
-                next_expand_h_0 = self.item_gru_op(new_item_fc, expand_h_0)         # lod = [0,1,2,3,4,5,6,7]
+                expand_pos_embed = layers.sequence_expand(cur_pos_embed, item_fc)   # lod = [0,1,2,3,4,5,6,7]
+                expand_gru_input = self.item_gru_fc_op(layers.concat([item_fc, expand_pos_embed], 1))    # lod = [0,4,7]
+                expand_gru_input = layers.lod_reset(expand_gru_input, expand_h_0) # lod = [0,1,2,3,4,5,6,7]
+                next_expand_h_0 = self.item_gru_op(expand_gru_input, expand_h_0)    # lod = [0,1,2,3,4,5,6,7]
                 next_expand_h_0 = layers.lod_reset(next_expand_h_0, item_fc)        # lod = [0,4,7]
 
                 expand_Q = self.out_Q_fc2_op(self.out_Q_fc1_op(next_expand_h_0))
-                cur_step_id = layers.slice(cur_step, axes=[0, 1], starts=[0, 0], ends=[1, 1])
+                cur_step_id = layers.slice(cur_pos, axes=[0, 1], starts=[0, 0], ends=[1, 1])
                 mask = layers.cast(pos >= cur_step_id, 'float32')
                 expand_Q = expand_Q * mask
                 max_Q = layers.sequence_pool(expand_Q, 'max')                       # lod = [0,1,2]
                 drnn.output(max_Q)
-
-                # update
-                next_step = cur_step + 1
-                drnn.update_memory(cur_step, next_step)
-
-            elif output_type == 'hidden':
-                drnn.output(next_h_0)                
 
             else:
                 raise NotImplementedError(output_type)
@@ -147,30 +141,30 @@ class RLUniRNN(BaseModel):
         sampled_id = layers.sampling_id(final_prob)
         return layers.cast(layers.reshape(sampled_id, [-1, 1]), 'int64')
 
-    def sampling_rnn(self, item_fc, h_0, decode_len=None, sampling_type='eps_greedy'):
-        def get_decode_item_fc(item_fc, decode_len):
-            zeros = layers.fill_constant_batch_size_like(item_fc, shape=[-1,1], value=0, dtype='int64')
-            decode_item_fc = layers.sequence_slice(item_fc, offset=zeros, length=decode_len)
-            return decode_item_fc
-
-        decode_item_fc = item_fc if decode_len is None else get_decode_item_fc(item_fc, decode_len)
+    def sampling_rnn(self, item_fc, h_0, sampling_type='eps_greedy'):
+        pos = fluid_sequence_get_pos(item_fc)                       # (b*seq_len, 1)
+        pos_embed = self.dict_data_embed_op['pos'](pos)             # (b*seq_len, dim)
         mask = layers.reduce_sum(item_fc, dim=1, keep_dim=True) * 0 + 1
 
         drnn = fluid.layers.DynamicRNN()
         with drnn.block():
-            _ = drnn.step_input(decode_item_fc)
-            cur_h_0 = drnn.memory(init=h_0, need_reorder=True)
-
             # e.g. batch_size = 2
-            # item_fc: lod = [0,4,7]
-            # cur_h_0: lod = [0,1,2]
+            _ = drnn.step_input(item_fc)
+            cur_pos_embed = drnn.step_input(pos_embed)          # lod = []
+            cur_h_0 = drnn.memory(init=h_0, need_reorder=True)  # lod = [0,1,2]
             item_fc = drnn.static_input(item_fc)
             mask = drnn.memory(init=mask, need_reorder=True)
 
+            # step_input will remove lod info
+            cur_pos_embed = layers.lod_reset(cur_pos_embed, cur_h_0)
+
             expand_h_0 = layers.sequence_expand(cur_h_0, item_fc)               # lod = [0,1,2,3,4,5,6,7]
-            new_item_fc = layers.lod_reset(item_fc, expand_h_0)                 # lod = [0,1,2,3,4,5,6,7]
-            next_expand_h_0 = self.item_gru_op(new_item_fc, expand_h_0)         # lod = [0,1,2,3,4,5,6,7]
+            expand_pos_embed = layers.sequence_expand(cur_pos_embed, item_fc)   # lod = [0,1,2,3,4,5,6,7]
+            expand_gru_input = self.item_gru_fc_op(layers.concat([item_fc, expand_pos_embed], 1))    # lod = [0,4,7]
+            expand_gru_input = layers.lod_reset(expand_gru_input, expand_h_0) # lod = [0,1,2,3,4,5,6,7]
+            next_expand_h_0 = self.item_gru_op(expand_gru_input, expand_h_0)    # lod = [0,1,2,3,4,5,6,7]
             next_expand_h_0 = layers.lod_reset(next_expand_h_0, item_fc)        # lod = [0,4,7]
+
             expand_Q = self.out_Q_fc2_op(self.out_Q_fc1_op(next_expand_h_0))
 
             if sampling_type == 'eps_greedy':
@@ -194,34 +188,23 @@ class RLUniRNN(BaseModel):
         return user_feature
 
     def item_decode(self, inputs, prev_hidden, output_type):
-        item_embedding = self._build_embeddings(inputs, self.item_slot_names + ['pos'])
+        decode_len = inputs['decode_len']
+        item_embedding = self._build_embeddings(inputs, self.item_slot_names)
         item_fc = self.item_fc_op(item_embedding)
-        decode_len = inputs['decode_len'] if 'decode_len' in inputs else None
-        if output_type in ['c_Q', 'max_Q', 'hidden']:
-            item_gru = self.custom_rnn(item_fc, h_0=prev_hidden, decode_len=decode_len, output_type=output_type)
+        if output_type in ['c_Q', 'max_Q']:
+            item_gru = self.train_rnn(item_fc, h_0=prev_hidden, output_type=output_type)
         elif output_type == 'sampled_id':
-            item_gru = self.sampling_rnn(item_fc, h_0=prev_hidden, decode_len=decode_len)
+            item_gru = self.sampling_rnn(item_fc, h_0=prev_hidden)
+        item_gru = self._cut_by_decode_len(layers.lod_reset(item_gru, item_fc), decode_len)
         return item_gru
 
     ### main functions ###
 
     def forward(self, inputs, output_type):
         """forward"""
-        assert output_type in ['c_Q', 'max_Q', 'sampled_id'], (output_type)
         user_feature = self.user_encode(inputs)
         item_Q = self.item_decode(inputs, user_feature, output_type)
         return item_Q
 
-    def infer_init(self, inputs):
-        """inference only the init part"""
-        user_feature = self.user_encode(inputs)
-        return user_feature
-
-    def infer_onestep(self, inputs):
-        """inference the gru-unit by one step"""
-        prev_hidden = inputs['prev_hidden']
-        item_hidden = self.item_decode(inputs, prev_hidden, output_type='hidden')
-        item_Q = self.out_Q_fc2_op(self.out_Q_fc1_op(item_hidden))
-        return item_hidden, item_Q
 
 

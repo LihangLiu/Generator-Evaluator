@@ -74,18 +74,6 @@ class RLComputationTask(object):
             with fluid.unique_name.guard():
                 self.inference_outputs = self.alg.inference()
 
-        with fluid.program_guard(self.infer_init_program, fluid.Program()):
-            with fluid.unique_name.guard():
-                self.infer_init_outputs = self.alg.infer_init()
-
-        with fluid.program_guard(self.infer_onestep_program, fluid.Program()):
-            with fluid.unique_name.guard():
-                self.infer_onestep_outputs = self.alg.infer_onestep()
-
-        with fluid.program_guard(self.sampling_program, fluid.Program()):
-            with fluid.unique_name.guard():
-                self.sampling_outputs = self.alg.sampling()
-
     def _define_executor(self, mode):
         """
         define executors, run startup, and load saved models
@@ -168,33 +156,6 @@ class RLComputationTask(object):
         return executor_run_with_fetch_dict(self.base_exe, 
                                             program=self.inference_program,
                                             fetch_dict=self.inference_outputs['fetch_dict'],
-                                            feed=feed_dict,
-                                            return_numpy=False,
-                                            scope=self.scope)
-
-    def infer_init(self, feed_dict):
-        """inference only the init part"""
-        return executor_run_with_fetch_dict(self.base_exe, 
-                                            program=self.infer_init_program,
-                                            fetch_dict=self.infer_init_outputs['fetch_dict'],
-                                            feed=feed_dict,
-                                            return_numpy=False,
-                                            scope=self.scope)
-
-    def infer_onestep(self, feed_dict):
-        """inference the gru-unit by one step"""
-        return executor_run_with_fetch_dict(self.base_exe, 
-                                            program=self.infer_onestep_program,
-                                            fetch_dict=self.infer_onestep_outputs['fetch_dict'],
-                                            feed=feed_dict,
-                                            return_numpy=False,
-                                            scope=self.scope)
-
-    def sampling(self, feed_dict):
-        """inference the gru-unit by one step"""
-        return executor_run_with_fetch_dict(self.base_exe, 
-                                            program=self.sampling_program,
-                                            fetch_dict=self.sampling_outputs['fetch_dict'],
                                             feed=feed_dict,
                                             return_numpy=False,
                                             scope=self.scope)
