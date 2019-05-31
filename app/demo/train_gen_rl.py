@@ -51,8 +51,8 @@ from src.fluid_utils import (fluid_create_lod_tensor as create_tensor,
                             concat_list_array, seq_len_2_lod, get_num_devices)
 from data.npz_dataset import NpzDataset, FakeTensor
 
-from train_sl import main as eval_entry_func
-from train_sl import SLFeedConvertor
+from train_eval import main as eval_entry_func
+from train_eval import EvalFeedConvertor
 
 #########
 # utils
@@ -69,57 +69,17 @@ def get_parser():
                         help = "single: use the first gpu, parallel: use all gpus")
     parser.add_argument('--task', 
                         default = 'train', 
-                        choices = ['train', 'test', 'debug', 'eval_list'],
+                        choices = ['train', 'sampling', 'debug'],
                         type = str, 
                         help = "")
 
     # model settings
     parser.add_argument('--gamma', type=float, help='')
     parser.add_argument('--eval_exp', type=str, help='')
-
-    # eval_list settings
-    parser.add_argument('--eval_npz_list', type=str, default='', help='')
     return parser
 
 
-class RLFeedConvertor(object):
-    @staticmethod
-    def infer_init(batch_data):
-        place = fluid.CPUPlace()
-        feed_dict = {}
-        for name in batch_data.conf.user_slot_names:
-            ft = batch_data.tensor_dict[name]
-            feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)
-        return feed_dict
-
-    @staticmethod
-    def infer_onestep(batch_data, step_id, prev_hidden, candidate_items):
-        """
-        prev_hidden: len() = batch_size, e.g. [(dim), [], (dim), ...]
-        candidate_items: len() = batch_size, e.g. [[2,3,6], [], [4,3], ...]
-        """
-        cand_lens = [len(ci) for ci in candidate_items]
-
-        global_item_indice = []
-        for ci, offset in zip(candidate_items, batch_data.offset()):
-            if len(ci) > 0:
-                global_item_indice.append(ci + offset)
-        global_item_indice = np.concatenate(global_item_indice, axis=0)
-
-        place = fluid.CPUPlace()
-        feed_dict = {}
-        input_item_lod = [seq_len_2_lod([1] * np.sum(cand_lens))]
-        for name in batch_data.conf.item_slot_names:
-            v = batch_data.tensor_dict[name].values
-            v = v[global_item_indice]
-            feed_dict[name] = create_tensor(v, lod=input_item_lod, place=place)
-
-        input_pos = np.array([step_id] * np.sum(cand_lens)).reshape([-1, 1])
-        feed_dict['pos'] = create_tensor(input_pos, lod=input_item_lod, place=place)
-        input_hidden = sequence_expand(prev_hidden, cand_lens)
-        feed_dict['prev_hidden'] = create_tensor(input_hidden, lod=input_item_lod, place=place)
-        return feed_dict
-
+class GenRLFeedConvertor(object):
     @staticmethod
     def train_test(batch_data, reward):
         place = fluid.CPUPlace()
@@ -177,11 +137,8 @@ def main(args):
     eval_td_ct = eval_entry_func(eval_args)
 
     ### other tasks
-    if args.task == 'test':
-        test(td_ct, args, conf, None, td_ct.ckp_step)
-        exit()
-    elif args.task == 'eval_list':
-        return eval_list(td_ct, args, conf, td_ct.ckp_step, args.eval_npz_list)
+    if args.task == 'sampling':
+        sampling(td_ct, eval_td_ct, args, conf, None, td_ct.ckp_step)
         exit()
 
     ### start training
@@ -191,31 +148,7 @@ def main(args):
     for epoch_id in range(td_ct.ckp_step + 1, conf.max_train_steps):
         train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id)
         td_ct.save_model(conf.model_dir, epoch_id)
-        test(td_ct, args, conf, summary_writer, epoch_id)
-
-
-def inference(td_ct, batch_data):
-    fetch_dict = td_ct.infer_init(RLFeedConvertor.infer_init(batch_data))
-    prev_hidden = np.array(fetch_dict['init_hidden'])
-    pre_items = [[] for _ in range(batch_data.batch_size())]
-    for step_id in range(np.max(batch_data.decode_len())):
-        ### evaluate candidates
-        candidate_items = batch_data.get_candidates(pre_items, stop_flags=(step_id >= batch_data.decode_len()))
-        cand_lens = [len(ci) for ci in candidate_items]
-        feed_dict = RLFeedConvertor.infer_onestep(batch_data, step_id, prev_hidden, candidate_items)
-        fetch_dict = td_ct.infer_onestep(feed_dict)
-        c_Q = np.array(fetch_dict['c_Q']).flatten()         # (b*cand_len,)
-        next_hidden = np.array(fetch_dict['next_hidden'])   # (b*cand_len, dim)
-
-        ### sampling
-        selected_index = sequence_sampling(c_Q, cand_lens, sampling_type='greedy')   # e.g. [1, None, 4, ...] with len = b
-
-        ### update pre_items and prev_hidden
-        for pre, si, ci in zip(pre_items, selected_index, candidate_items):
-            if not si is None:
-                pre.append(ci[si])
-        prev_hidden = sequence_gather(next_hidden, cand_lens, selected_index)
-    return pre_items
+        sampling(td_ct, eval_td_ct, args, conf, summary_writer, epoch_id)
 
 
 def train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id):
@@ -235,13 +168,13 @@ def train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id
         batch_data.set_decode_len(batch_data.seq_lens())
         batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
 
-        fetch_dict = td_ct.sampling(RLFeedConvertor.sampling(batch_data))
+        fetch_dict = td_ct.sampling(GenRLFeedConvertor.sampling(batch_data))
         sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
         order = sequence_unconcat(sampled_id, batch_data.decode_len())
 
         ### get reward
         reordered_batch_data = batch_data.get_reordered(order)
-        fetch_dict = eval_td_ct.inference(SLFeedConvertor.inference(reordered_batch_data))
+        fetch_dict = eval_td_ct.inference(EvalFeedConvertor.inference(reordered_batch_data))
         reward = np.array(fetch_dict['click_prob'])[:, 1]
 
         ### save to replay_memory
@@ -251,7 +184,7 @@ def train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id
 
         ### train
         memory_batch_data, reward = replay_memory[np.random.randint(len(replay_memory))]
-        feed_dict = RLFeedConvertor.train_test(memory_batch_data, reward)
+        feed_dict = GenRLFeedConvertor.train_test(memory_batch_data, reward)
         fetch_dict = td_ct.train(feed_dict)
 
         ### logging
@@ -271,8 +204,8 @@ def train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id
         batch_id += 1
 
 
-def test(td_ct, args, conf, summary_writer, epoch_id):
-    """test"""
+def sampling(td_ct, eval_td_ct, args, conf, summary_writer, epoch_id):
+    """sampling"""
     dataset = NpzDataset(conf.test_npz_list, conf.npz_config_path, conf.requested_npz_names, if_random_shuffle=False)
     data_gen = dataset.get_data_generator(conf.batch_size)
 
@@ -284,34 +217,22 @@ def test(td_ct, args, conf, summary_writer, epoch_id):
         batch_data.set_decode_len(batch_data.seq_lens())
         batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
 
-        fetch_dict = td_ct.sampling(RLFeedConvertor.sampling(batch_data))
+        fetch_dict = td_ct.sampling(GenRLFeedConvertor.sampling(batch_data))
         sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
         order = sequence_unconcat(sampled_id, batch_data.decode_len())
 
         ### get reward
         reordered_batch_data = batch_data.get_reordered(order)
-        fetch_dict = eval_td_ct.inference(SLFeedConvertor.inference(reordered_batch_data))
+        fetch_dict = eval_td_ct.inference(EvalFeedConvertor.inference(reordered_batch_data))
         reward = np.array(fetch_dict['click_prob'])[:, 1]
 
         ### logging
         list_reward.append(np.mean(reward))
+        print('reward', reward.shape, np.mean(reward))
 
         last_batch_data = BatchData(conf, tensor_dict)
 
-    add_scalar_summary(summary_writer, global_batch_id, 'train/rl_reward', np.mean(list_reward))
-
-
-def eval_list(td_ct, args, conf, npz_list):
-    """
-    return unshuffled npz_list dataset and td_ct
-    """
-    dataset = NpzDataset(npz_list, 
-                        conf.npz_config_path, 
-                        conf.requested_npz_names,
-                        if_random_shuffle=False)
-    print ('load', npz_list)
-    data_manager = DataManager(conf, dataset, conf.batch_size)
-    return data_manager, td_ct
+    add_scalar_summary(summary_writer, global_batch_id, 'sampling/reward', np.mean(list_reward))
 
     
 

@@ -17,7 +17,7 @@ sys.path.append(PARL_DIR)
 import parl.layers as layers
 from parl.framework.algorithm import Model
 
-from fluid_utils import fluid_sequence_pad, fluid_split, fluid_sequence_get_seq_len
+from fluid_utils import fluid_sequence_pad, fluid_split, fluid_sequence_get_seq_len, fluid_sequence_get_pos
 from base_net import BaseModel, default_fc, default_batch_norm, default_embedding, default_drnn
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s') # filename='hot_rl.log', 
@@ -40,7 +40,8 @@ class BiRNN(BaseModel):
 
         self.user_feature_fc_op = default_fc(self.hidden_size, act='relu', name='user_feature_fc')
 
-        self.item_fc_op = default_fc(self.hidden_size * 3, act='relu', name='item_fc')
+        self.item_fc_op = default_fc(self.hidden_size, act='relu', name='item_fc')
+        self.item_gru_fc_op = default_fc(self.hidden_size * 3, act='relu', name='item_gru_fc')
         self.item_gru_forward_op = default_drnn(self.hidden_size, name='item_gru_forward')
         self.item_gru_backward_op = default_drnn(self.hidden_size, name='item_gru_backward', is_reverse=True)
 
@@ -51,13 +52,12 @@ class BiRNN(BaseModel):
         """create layers.data here"""
         inputs = OrderedDict()
         data_attributes = copy.deepcopy(self.data_attributes)
-        data_attributes['pos'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
         data_attributes['click_id'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
 
         if mode in ['train', 'test']:
-            list_names = self.item_slot_names + self.user_slot_names + ['pos', 'click_id']
+            list_names = self.item_slot_names + self.user_slot_names + ['click_id']
         elif mode in ['inference']:
-            list_names = self.item_slot_names + self.user_slot_names + ['pos']
+            list_names = self.item_slot_names + self.user_slot_names
         else:
             raise NotImplementedError(mode)
 
@@ -71,11 +71,16 @@ class BiRNN(BaseModel):
         # encode
         user_embedding = self._build_embeddings(inputs, self.user_slot_names)
         user_feature = self.user_feature_fc_op(user_embedding)
-        # item rnn
-        item_embedding = self._build_embeddings(inputs, self.item_slot_names + ['pos'])            
+        # item embed + pos embed
+        item_embedding = self._build_embeddings(inputs, self.item_slot_names)            
         item_fc = self.item_fc_op(item_embedding)
-        item_gru_forward = self.item_gru_forward_op(item_fc, h_0=user_feature)
-        item_gru_backward = self.item_gru_backward_op(item_fc, h_0=user_feature)
+        pos = fluid_sequence_get_pos(item_fc)
+        pos_embed = self.dict_data_embed_op['pos'](pos)
+
+        # item gru
+        gru_input = self.item_gru_fc_op(layers.concat([item_fc, pos_embed], 1))
+        item_gru_forward = self.item_gru_forward_op(gru_input, h_0=user_feature)
+        item_gru_backward = self.item_gru_backward_op(gru_input, h_0=user_feature)
         item_gru = layers.concat([item_gru_forward, item_gru_backward], axis=1)
         click_prob = self.out_click_fc2_op(self.out_click_fc1_op(item_gru))
         return click_prob
@@ -165,7 +170,7 @@ class Transformer(BaseModel):
 
         ### embed fc
         self.user_feature_fc_op = default_fc(self.hidden_size, act='relu', name='user_feature_fc')
-        self.item_fc_op = default_fc(self.hidden_size * 3, act='relu', name='item_fc')
+        self.item_fc_op = default_fc(self.hidden_size, act='relu', name='item_fc')
         self.input_embed_fc_op = default_fc(self.hidden_size, act='relu', name='input_embed_fc')
             
         ### blocks
@@ -189,7 +194,7 @@ class Transformer(BaseModel):
 
     def _attention_norm(self, is_test, atten_op, norm_op, 
                         input, atten_input, max_seq_len, max_atten_seq_len,
-                        num_head, seq_lens):
+                        num_head):
         """
         If QK_type is relu or softsign, no need to use maxlen for sequence_pad.
         args:
@@ -207,6 +212,7 @@ class Transformer(BaseModel):
             seq_len_mask.stop_gradient = True
             return seq_len_mask         # (batch, seq_len, atten_seq_len)
 
+        seq_lens = fluid_sequence_get_seq_len(input)
         ### padding
         input_padded = fluid_sequence_pad(input, 0, max_seq_len) # (batch, max_seq_len, dim)
         atten_input_padded = fluid_sequence_pad(atten_input, 0, max_atten_seq_len) # (batch, max_recent_seq_len, dim)
@@ -231,13 +237,12 @@ class Transformer(BaseModel):
         """create layers.data here"""
         inputs = OrderedDict()
         data_attributes = copy.deepcopy(self.data_attributes)
-        data_attributes['pos'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
         data_attributes['click_id'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
 
         if mode in ['train', 'test']:
-            list_names = self.item_slot_names + self.user_slot_names + ['pos', 'click_id']
+            list_names = self.item_slot_names + self.user_slot_names + ['click_id']
         elif mode in ['inference']:
-            list_names = self.item_slot_names + self.user_slot_names + ['pos']
+            list_names = self.item_slot_names + self.user_slot_names
         else:
             raise NotImplementedError(mode)
 
@@ -246,33 +251,28 @@ class Transformer(BaseModel):
             inputs[name] = layers.data(name=name, shape=p['shape'], dtype=p['dtype'], lod_level=p['lod_level'])
         return inputs
 
-    def decode(self, is_test, input_embed, seq_lens):
-        def transformer_decode(self, block_in):
-            for b_id in range(self._num_blocks):
-                ### attentions
-                atten_out = self._attention_norm(is_test, 
-                                                self.atten_ops[b_id],
-                                                self.atten_norm_ops[b_id],
-                                                block_in, 
-                                                block_in,
-                                                self._max_seq_len,
-                                                self._max_seq_len,
-                                                self._num_head, 
-                                                seq_lens)
-                ### feed forward
-                ffn_out = self._ffn(is_test, 
-                                    self.ffn_fc1_ops[b_id], 
-                                    self.ffn_fc2_ops[b_id], 
-                                    self.ffn_norm_ops[b_id],
-                                    atten_out)
-                ffn_out = block_in + ffn_out
-                ### for next
-                block_in = ffn_out
-            return ffn_out
-
-        block_in = self.input_embed_fc_op(input_embed)
-        output = transformer_decode(self, block_in)
-        return output
+    def transformer_decode(self, is_test, trans_in):
+        block_in = trans_in
+        for b_id in range(self._num_blocks):
+            ### attentions
+            atten_out = self._attention_norm(is_test, 
+                                            self.atten_ops[b_id],
+                                            self.atten_norm_ops[b_id],
+                                            block_in, 
+                                            block_in,
+                                            self._max_seq_len,
+                                            self._max_seq_len,
+                                            self._num_head)
+            ### feed forward
+            ffn_out = self._ffn(is_test, 
+                                self.ffn_fc1_ops[b_id], 
+                                self.ffn_fc2_ops[b_id], 
+                                self.ffn_norm_ops[b_id],
+                                atten_out)
+            ffn_out = block_in + ffn_out
+            ### for next
+            block_in = ffn_out
+        return ffn_out
 
     def forward(self, inputs, mode):
         """
@@ -284,12 +284,18 @@ class Transformer(BaseModel):
         user_embedding = self._build_embeddings(inputs, self.user_slot_names)
         user_feature = self.user_feature_fc_op(user_embedding)
 
-        # item decode
-        item_embedding = self._build_embeddings(inputs, self.item_slot_names + ['pos'])
+        # item embed and pos embed
+        item_embedding = self._build_embeddings(inputs, self.item_slot_names)
         item_fc = self.item_fc_op(item_embedding)
-        input_embed = layers.concat([item_fc, layers.sequence_expand_as(user_feature, item_fc)], 1) # (batch*seq_lens, dim)
-        seq_lens = fluid_sequence_get_seq_len(inputs[self.item_slot_names[0]])
-        decoding = self.decode(is_test, input_embed, seq_lens)
+        pos = fluid_sequence_get_pos(item_fc)
+        pos_embed = self.dict_data_embed_op['pos'](pos)
+        input_embed = layers.concat([item_fc, pos_embed,
+                                    layers.sequence_expand_as(user_feature, item_fc)], 
+                                    1)
+
+        # transformer
+        trans_in = self.input_embed_fc_op(input_embed)
+        decoding = self.transformer_decode(is_test, trans_in)
         click_prob = self.output_fc2_op(self.output_fc1_op(decoding))
         return click_prob
 

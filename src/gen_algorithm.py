@@ -71,21 +71,12 @@ class GenAlgorithm(Algorithm):
         fetch_dict['click_prob'] = click_prob
         return {'fetch_dict': fetch_dict}
 
-    def infer_init(self):
-        """inference only the init part"""
-        inputs = self.model.create_inputs(mode='infer_init')
-        init_hidden = self.model.infer_init(inputs)
+    def sampling(self):
+        """sampling"""
+        inputs = self.model.create_inputs(mode='sampling')
+        sampled_id = self.model.sampling(inputs)
         fetch_dict = OrderedDict()
-        fetch_dict['init_hidden'] = init_hidden
-        return {'fetch_dict': fetch_dict}
-
-    def infer_onestep(self):
-        """inference the gru-unit by one step"""
-        inputs = self.model.create_inputs(mode='infer_onestep')
-        next_hidden, click_prob = self.model.infer_onestep(inputs)
-        fetch_dict = OrderedDict()
-        fetch_dict['next_hidden'] = next_hidden
-        fetch_dict['click_prob'] = click_prob
+        fetch_dict['sampled_id'] = sampled_id
         return {'fetch_dict': fetch_dict}
 
 

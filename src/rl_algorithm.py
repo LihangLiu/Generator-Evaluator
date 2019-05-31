@@ -100,8 +100,8 @@ class RLAlgorithm(Algorithm):
 
     def sampling(self):
         """sampling"""
-        inputs = self.model.create_inputs(mode='inference')
-        sampled_id = self.model.forward(inputs, output_type='sampled_id')
+        inputs = self.model.create_inputs(mode='sampling')
+        sampled_id = self.model.sampling(inputs)
 
         fetch_dict = OrderedDict()
         fetch_dict['sampled_id'] = sampled_id

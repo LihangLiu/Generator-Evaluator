@@ -34,16 +34,12 @@ import paddle
 from paddle import fluid
 
 from config import Config
-from utils import (sequence_unconcat, sequence_expand, sequence_gather, sequence_sampling, 
-                    BatchData, add_scalar_summary)
+from utils import BatchData, add_scalar_summary
 
 import _init_paths
 
-from src.gen_net import DNN, UniRNN
 from src.eval_net import BiRNN, Transformer
-from src.gen_algorithm import GenAlgorithm
 from src.eval_algorithm import EvalAlgorithm
-from src.gen_computation_task import GenComputationTask
 from src.eval_computation_task import EvalComputationTask
 
 from src.utils import (read_json, print_args, tik, tok, threaded_generator, print_once,
@@ -72,11 +68,11 @@ def get_parser():
                         help = "")
     
     # model settings
-    parser.add_argument('--model', type=str, choices=['DNN', 'UniRNN', 'BiRNN', 'Trans'], help='')
+    parser.add_argument('--model', type=str, choices=['BiRNN', 'Trans'], help='')
     return parser
 
 
-class SLFeedConvertor(object):
+class EvalFeedConvertor(object):
     @staticmethod
     def train_test(batch_data):
         place = fluid.CPUPlace()
@@ -85,8 +81,6 @@ class SLFeedConvertor(object):
             ft = batch_data.tensor_dict[name]
             feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)
 
-        pos = batch_data.pos().reshape([-1, 1]).astype('int64')
-        feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
         click_id = batch_data.tensor_dict['click_id']
         feed_dict['click_id'] = create_tensor(click_id.values, lod=click_id.lod, place=place)
         return feed_dict
@@ -97,10 +91,7 @@ class SLFeedConvertor(object):
         feed_dict = {}
         for name in batch_data.conf.user_slot_names + batch_data.conf.item_slot_names:
             ft = batch_data.tensor_dict[name]
-            feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)
-            
-        pos = batch_data.pos().reshape([-1, 1])
-        feed_dict['pos'] = create_tensor(pos, lod=batch_data.lod(), place=place)
+            feed_dict[name] = create_tensor(ft.values, lod=ft.lod, place=place)            
         return feed_dict
 
 
@@ -116,22 +107,13 @@ def main(args):
     scope = fluid.Scope()
     with fluid.scope_guard(scope):
         with fluid.unique_name.guard():
-            if args.model == 'DNN':
-                model = DNN(conf, npz_config)
-            elif args.model == 'UniRNN':
-                model = UniRNN(conf, npz_config)
-            elif args.model == 'BiRNN':
+            if args.model == 'BiRNN':
                 model = BiRNN(conf, npz_config)
             elif args.model == 'Trans':
                 model = Transformer(conf, npz_config, num_blocks=2, num_head=4)
 
-            gpu_id = (0 if args.use_cuda == 1 else -1)
-            if args.model in ['DNN', 'UniRNN']:
-                algorithm = GenAlgorithm(model, optimizer=conf.optimizer, lr=conf.lr, gpu_id=gpu_id)
-                td_ct = GenComputationTask(algorithm, model_dir=conf.model_dir, mode=args.train_mode, scope=scope)
-            elif args.model in ['BiRNN', 'Trans']:
-                algorithm = EvalAlgorithm(model, optimizer=conf.optimizer, lr=conf.lr, gpu_id=gpu_id)
-                td_ct = EvalComputationTask(algorithm, model_dir=conf.model_dir, mode=args.train_mode, scope=scope)
+            algorithm = EvalAlgorithm(model, optimizer=conf.optimizer, lr=conf.lr, gpu_id=(0 if args.use_cuda == 1 else -1))
+            td_ct = EvalComputationTask(algorithm, model_dir=conf.model_dir, mode=args.train_mode, scope=scope)
 
     ### other tasks
     if args.task == 'test':
@@ -161,7 +143,7 @@ def train(td_ct, args, conf, summary_writer, epoch_id):
     batch_id = 0
     for tensor_dict in data_gen:
         batch_data = BatchData(conf, tensor_dict)
-        fetch_dict = td_ct.train(SLFeedConvertor.train_test(batch_data))
+        fetch_dict = td_ct.train(EvalFeedConvertor.train_test(batch_data))
         list_loss.append(np.array(fetch_dict['loss']))
         list_epoch_loss.append(np.mean(np.array(fetch_dict['loss'])))
         if batch_id % conf.prt_interval == 0:
@@ -181,7 +163,7 @@ def test(td_ct, args, conf, summary_writer, epoch_id):
     batch_id = 0
     for tensor_dict in data_gen:
         batch_data = BatchData(conf, tensor_dict)
-        fetch_dict = td_ct.test(SLFeedConvertor.train_test(batch_data))
+        fetch_dict = td_ct.test(EvalFeedConvertor.train_test(batch_data))
         auc_metric.add(labels=np.array(fetch_dict['click_id']).flatten(),
                         y_scores=np.array(fetch_dict['click_prob'])[:, 1])
         batch_id += 1

@@ -17,7 +17,7 @@ sys.path.append(PARL_DIR)
 import parl.layers as layers
 from parl.framework.algorithm import Model
 
-from fluid_utils import fluid_batch_norm
+from fluid_utils import fluid_batch_norm, fluid_sequence_pad, fluid_sequence_get_pos, fluid_sequence_index, fluid_sequence_scatter
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s') # filename='hot_rl.log', 
 
@@ -176,5 +176,79 @@ class BaseModel(Model):
 
     def forward(self, inputs, mode):
         raise NotImplementedError()
+
+    ### sampling functions ###
+
+    def _cut_by_decode_len(self, input, decode_len):
+        zeros = layers.fill_constant_batch_size_like(input, shape=[-1,1], value=0, dtype='int64')
+        output = layers.sequence_slice(layers.cast(input, 'float32'), offset=zeros, length=decode_len)
+        return layers.cast(output, input.dtype)
+
+    def eps_greedy_sampling(self, scores, mask, eps):
+        scores = scores * mask
+        scores_padded = layers.squeeze(fluid_sequence_pad(scores, 0, maxlen=128), [2])  # (b*s, 1) -> (b, s, 1) -> (b, s)
+        mask_padded = layers.squeeze(fluid_sequence_pad(mask, 0, maxlen=128), [2])
+
+        def get_greedy_prob(scores_padded, mask_padded):
+            s = scores_padded - (mask_padded*(-1) + 1) * self.BIG_VALUE
+            max_value = layers.reduce_max(s, dim=1, keep_dim=True)
+            greedy_prob = layers.cast(s >= max_value, 'float32')
+            return greedy_prob
+        greedy_prob = get_greedy_prob(scores_padded, mask_padded)
+        eps_prob = mask_padded * eps / layers.reduce_sum(mask_padded, dim=1, keep_dim=True)
+
+        final_prob = (greedy_prob + eps_prob) * mask_padded
+        final_prob = final_prob / layers.reduce_sum(final_prob, dim=1, keep_dim=True)
+
+        sampled_id = layers.sampling_id(final_prob)
+        return layers.cast(layers.reshape(sampled_id, [-1, 1]), 'int64')
+
+    def sampling_rnn_forward(self, independent_item_fc, independent_hidden, independent_pos_embed):
+        raise NotImplementedError()
+
+        # example:
+        gru_input = self.item_gru_fc_op(layers.concat([independent_item_fc, independent_pos_embed], 1))
+        next_hidden = self.item_gru_op(gru_input, independent_hidden)
+        scores = self.out_Q_fc2_op(self.out_Q_fc1_op(next_hidden))
+        return next_hidden, scores
+
+    def sampling_rnn(self, item_fc, h_0, pos_embed, forward_func, sampling_type):
+        mask = layers.reduce_sum(item_fc, dim=1, keep_dim=True) * 0 + 1
+        drnn = fluid.layers.DynamicRNN()
+        with drnn.block():
+            # e.g. batch_size = 2
+            _ = drnn.step_input(item_fc)
+            cur_pos_embed = drnn.step_input(pos_embed)          # lod = []
+            cur_h_0 = drnn.memory(init=h_0, need_reorder=True)  # lod = [0,1,2]
+            item_fc = drnn.static_input(item_fc)
+            mask = drnn.memory(init=mask, need_reorder=True)
+
+            # step_input will remove lod info
+            cur_pos_embed = layers.lod_reset(cur_pos_embed, cur_h_0)
+
+            # expand
+            expand_h_0 = layers.sequence_expand(cur_h_0, item_fc)               # lod = [0,1,2,3,4,5,6,7]
+            expand_pos_embed = layers.sequence_expand(cur_pos_embed, item_fc)   # lod = [0,1,2,3,4,5,6,7]
+            expand_item_fc = layers.lod_reset(item_fc, expand_h_0)
+            # forward
+            expand_next_h_0, expand_scores = forward_func(expand_item_fc, expand_h_0, expand_pos_embed)
+            # reset result lod
+            expand_next_h_0 = layers.lod_reset(expand_next_h_0, item_fc)        # lod = [0,4,7]
+            expand_scores = layers.lod_reset(expand_scores, item_fc)            # lod = [0,4,7]
+
+            if sampling_type == 'eps_greedy':
+                selected_index = self.eps_greedy_sampling(expand_scores, mask, eps=0)
+
+            drnn.output(selected_index)
+
+            next_h_0 = fluid_sequence_index(expand_next_h_0, selected_index)
+            next_mask = fluid_sequence_scatter(mask, layers.reshape(selected_index, [-1]), 0.0)
+
+            # update
+            drnn.update_memory(cur_h_0, next_h_0)
+            drnn.update_memory(mask, next_mask)
+
+        drnn_output = drnn()
+        return drnn_output
 
 
