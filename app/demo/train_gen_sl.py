@@ -155,6 +155,7 @@ def main(args):
         train(td_ct, args, conf, summary_writer, epoch_id)
         td_ct.save_model(conf.model_dir, epoch_id)
         test(td_ct, args, conf, summary_writer, epoch_id)
+        sampling(td_ct, eval_td_ct, args, conf, summary_writer, epoch_id)
 
 
 def train(td_ct, args, conf, summary_writer, epoch_id):
@@ -202,6 +203,7 @@ def sampling(td_ct, eval_td_ct, args, conf, summary_writer, epoch_id):
 
     list_reward = []
     last_batch_data = BatchData(conf, data_gen.next())
+    batch_id = 0
     for tensor_dict in data_gen:
         ### sampling
         batch_data = BatchData(conf, tensor_dict)
@@ -219,11 +221,14 @@ def sampling(td_ct, eval_td_ct, args, conf, summary_writer, epoch_id):
 
         ### logging
         list_reward.append(np.mean(reward))
-        print('reward', reward.shape, np.mean(reward))
+
+        if batch_id == 100:
+            break
 
         last_batch_data = BatchData(conf, tensor_dict)
+        batch_id += 1
 
-    add_scalar_summary(summary_writer, global_batch_id, 'sampling/reward', np.mean(list_reward))
+    add_scalar_summary(summary_writer, epoch_id, 'sampling/reward-%s' % args.eval_exp, np.mean(list_reward))
 
     
 

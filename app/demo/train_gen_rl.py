@@ -97,7 +97,7 @@ class GenRLFeedConvertor(object):
         return feed_dict
 
     @staticmethod
-    def sampling(batch_data):
+    def sampling(batch_data, eps):
         place = fluid.CPUPlace()
         feed_dict = {}
         for name in batch_data.conf.user_slot_names + batch_data.conf.item_slot_names:
@@ -107,6 +107,8 @@ class GenRLFeedConvertor(object):
         decode_len = batch_data.decode_len().reshape([-1, 1]).astype('int64')
         lod = [seq_len_2_lod([1] * len(decode_len))]
         feed_dict['decode_len'] = create_tensor(decode_len, lod=lod, place=place)
+        eps = np.array([eps]).astype('float32')
+        feed_dict['eps'] = create_tensor(eps, lod=[], place=place)
         return feed_dict
 
 
@@ -168,7 +170,7 @@ def train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id
         batch_data.set_decode_len(batch_data.seq_lens())
         batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
 
-        fetch_dict = td_ct.sampling(GenRLFeedConvertor.sampling(batch_data))
+        fetch_dict = td_ct.sampling(GenRLFeedConvertor.sampling(batch_data, eps=0.2))
         sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
         order = sequence_unconcat(sampled_id, batch_data.decode_len())
 
@@ -211,13 +213,14 @@ def sampling(td_ct, eval_td_ct, args, conf, summary_writer, epoch_id):
 
     list_reward = []
     last_batch_data = BatchData(conf, data_gen.next())
+    batch_id = 0
     for tensor_dict in data_gen:
         ### sampling
         batch_data = BatchData(conf, tensor_dict)
         batch_data.set_decode_len(batch_data.seq_lens())
         batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
 
-        fetch_dict = td_ct.sampling(GenRLFeedConvertor.sampling(batch_data))
+        fetch_dict = td_ct.sampling(GenRLFeedConvertor.sampling(batch_data, eps=0))
         sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
         order = sequence_unconcat(sampled_id, batch_data.decode_len())
 
@@ -228,11 +231,14 @@ def sampling(td_ct, eval_td_ct, args, conf, summary_writer, epoch_id):
 
         ### logging
         list_reward.append(np.mean(reward))
-        print('reward', reward.shape, np.mean(reward))
+
+        if batch_id == 100:
+            break
 
         last_batch_data = BatchData(conf, tensor_dict)
+        batch_id += 1
 
-    add_scalar_summary(summary_writer, global_batch_id, 'sampling/reward', np.mean(list_reward))
+    add_scalar_summary(summary_writer, epoch_id, 'sampling/reward-%s' % args.eval_exp, np.mean(list_reward))
 
     
 

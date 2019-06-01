@@ -1,6 +1,6 @@
 import numpy as np
 import os
-from os.path import join, dirname
+from os.path import join, dirname, exists
 import time
 import datetime
 import collections
@@ -187,20 +187,6 @@ class BatchData(object):
         for name in self.conf.item_slot_names:
             values = np.concatenate([self.tensor_dict[name].values, other_batch_data.tensor_dict[name].values], 0)
             self.tensor_dict[name] = FakeTensor(values[global_item_indice], seq_lens)
-
-    # def get_candidates(self, pre_items):
-    #     """
-    #     return:
-    #         candidate_items: len() = batch_size, e.g. [[2,3,5], [], [3,4], ...]
-    #     """
-    #     res = []
-    #     for pre, dec_len, seq_len in zip(pre_items, self.decode_len(), self.seq_lens()):
-    #         if len(pre) >= dec_len:
-    #             res.append([])
-    #         else:
-    #             full = np.arange(seq_len)
-    #             res.append(np.setdiff1d(full, pre))
-    #     return res
 
     def get_candidates(self, pre_items, stop_flags=None):
         """

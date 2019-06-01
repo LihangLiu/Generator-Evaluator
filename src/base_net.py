@@ -17,7 +17,8 @@ sys.path.append(PARL_DIR)
 import parl.layers as layers
 from parl.framework.algorithm import Model
 
-from fluid_utils import fluid_batch_norm, fluid_sequence_pad, fluid_sequence_get_pos, fluid_sequence_index, fluid_sequence_scatter
+from fluid_utils import (fluid_batch_norm, fluid_sequence_pad, fluid_sequence_get_pos, 
+                        fluid_sequence_index, fluid_sequence_scatter, fluid_sequence_get_seq_len)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s') # filename='hot_rl.log', 
 
@@ -188,6 +189,7 @@ class BaseModel(Model):
         scores = scores * mask
         scores_padded = layers.squeeze(fluid_sequence_pad(scores, 0, maxlen=128), [2])  # (b*s, 1) -> (b, s, 1) -> (b, s)
         mask_padded = layers.squeeze(fluid_sequence_pad(mask, 0, maxlen=128), [2])
+        seq_lens = fluid_sequence_get_seq_len(scores)
 
         def get_greedy_prob(scores_padded, mask_padded):
             s = scores_padded - (mask_padded*(-1) + 1) * self.BIG_VALUE
@@ -200,8 +202,10 @@ class BaseModel(Model):
         final_prob = (greedy_prob + eps_prob) * mask_padded
         final_prob = final_prob / layers.reduce_sum(final_prob, dim=1, keep_dim=True)
 
-        sampled_id = layers.sampling_id(final_prob)
-        return layers.cast(layers.reshape(sampled_id, [-1, 1]), 'int64')
+        sampled_id = layers.reshape(layers.sampling_id(final_prob), [-1, 1])
+        max_id = layers.cast(layers.cast(seq_lens, 'float32') - 1, 'int64')
+        sampled_id = layers.elementwise_min(sampled_id, max_id)
+        return layers.cast(sampled_id, 'int64')
 
     def sampling_rnn_forward(self, independent_item_fc, independent_hidden, independent_pos_embed):
         raise NotImplementedError()
@@ -212,7 +216,7 @@ class BaseModel(Model):
         scores = self.out_Q_fc2_op(self.out_Q_fc1_op(next_hidden))
         return next_hidden, scores
 
-    def sampling_rnn(self, item_fc, h_0, pos_embed, forward_func, sampling_type):
+    def sampling_rnn(self, item_fc, h_0, pos_embed, forward_func, sampling_type, eps=0):
         mask = layers.reduce_sum(item_fc, dim=1, keep_dim=True) * 0 + 1
         drnn = fluid.layers.DynamicRNN()
         with drnn.block():
@@ -237,7 +241,7 @@ class BaseModel(Model):
             expand_scores = layers.lod_reset(expand_scores, item_fc)            # lod = [0,4,7]
 
             if sampling_type == 'eps_greedy':
-                selected_index = self.eps_greedy_sampling(expand_scores, mask, eps=0)
+                selected_index = self.eps_greedy_sampling(expand_scores, mask, eps=eps)
 
             drnn.output(selected_index)
 
