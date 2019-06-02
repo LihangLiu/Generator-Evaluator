@@ -83,18 +83,8 @@ class RLUniRNN(BaseModel):
             cur_pos_embed = layers.lod_reset(cur_pos_embed, cur_h_0)
 
             next_h_0, Q = self.sampling_rnn_forward(cur_item_fc, cur_h_0, cur_pos_embed)
-            # next_h_0.stop_gradient = True
-            # Q.stop_gradient = True
-            # layers.Print(next_h_0, summarize=32, message='next_h_0')
-            # layers.Print(Q, summarize=32, message='Q')
-
-            # gru_input = self.item_gru_fc_op(layers.concat([cur_item_fc, cur_pos_embed], 1))
-            # next_h_0 = self.item_gru_op(gru_input, h_0=cur_h_0)
 
             if output_type == 'c_Q':
-                # Q = self.out_Q_fc2_op(self.out_Q_fc1_op(next_h_0))
-                # layers.Print(next_h_0, summarize=32, message='next_h_0 2')
-                # layers.Print(Q, summarize=32, message='Q 2')
                 drnn.output(Q)
 
             elif output_type == 'max_Q':
