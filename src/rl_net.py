@@ -26,8 +26,10 @@ from base_net import BaseModel, default_fc, default_batch_norm, default_embeddin
 class RLUniRNN(BaseModel):
     """
     """
-    def __init__(self, conf, npz_config):
+    def __init__(self, conf, npz_config, candidate_encode=None):
         super(RLUniRNN, self).__init__(conf, npz_config)
+        self._candidate_encode = candidate_encode
+
         self._create_params()
 
     def _create_params(self):
@@ -70,9 +72,6 @@ class RLUniRNN(BaseModel):
         return inputs
 
     def train_rnn(self, item_fc, h_0, pos, pos_embed, output_type=''):
-        # pos = fluid_sequence_get_pos(item_fc)                       # (b*seq_len, 1)
-        # pos_embed = self.dict_data_embed_op['pos'](pos)             # (b*seq_len, dim)
-
         drnn = fluid.layers.DynamicRNN()
         with drnn.block():
             cur_item_fc = drnn.step_input(item_fc)
@@ -97,14 +96,15 @@ class RLUniRNN(BaseModel):
                 pos = drnn.static_input(pos)            # lod = [0,4,7]
                 item_fc = drnn.static_input(item_fc)    # lod = [0,4,7]
 
+                # expand
                 expand_h_0 = layers.sequence_expand(cur_h_0, item_fc)               # lod = [0,1,2,3,4,5,6,7]
                 expand_pos_embed = layers.sequence_expand(cur_pos_embed, item_fc)   # lod = [0,1,2,3,4,5,6,7]
-                expand_gru_input = self.item_gru_fc_op(layers.concat([item_fc, expand_pos_embed], 1))    # lod = [0,4,7]
-                expand_gru_input = layers.lod_reset(expand_gru_input, expand_h_0) # lod = [0,1,2,3,4,5,6,7]
-                next_expand_h_0 = self.item_gru_op(expand_gru_input, expand_h_0)    # lod = [0,1,2,3,4,5,6,7]
-                next_expand_h_0 = layers.lod_reset(next_expand_h_0, item_fc)        # lod = [0,4,7]
+                expand_item_fc = layers.lod_reset(item_fc, expand_h_0)
+                # forward
+                _, expand_scores = self.sampling_rnn_forward(expand_item_fc, expand_h_0, expand_pos_embed)
+                # reset result lod
+                expand_Q = layers.lod_reset(expand_scores, item_fc)            # lod = [0,4,7]             
 
-                expand_Q = self.out_Q_fc2_op(self.out_Q_fc1_op(next_expand_h_0))
                 cur_step_id = layers.slice(cur_pos, axes=[0, 1], starts=[0, 0], ends=[1, 1])
                 mask = layers.cast(pos >= cur_step_id, 'float32')
                 expand_Q = expand_Q * mask
