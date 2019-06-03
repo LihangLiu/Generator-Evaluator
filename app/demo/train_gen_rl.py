@@ -40,7 +40,7 @@ from utils import (sequence_unconcat, sequence_expand, sequence_gather, sequence
 import _init_paths
 
 from src.eval_net import BiRNN, Transformer
-from src.rl_net import RLUniRNN
+from src.rl_net import RLUniRNN, RLPointerNet
 from src.gen_algorithm import GenAlgorithm
 from src.rl_algorithm import RLAlgorithm
 from src.rl_computation_task import RLComputationTask
@@ -74,7 +74,9 @@ def get_parser():
                         help = "")
 
     # model settings
+    parser.add_argument('--model', choices=['UniRNN', 'PointerNet'], help='')
     parser.add_argument('--gamma', type=float, help='')
+    parser.add_argument('--candidate_encode', default=None, help='')
     parser.add_argument('--eval_exp', type=str, help='')
     return parser
 
@@ -124,7 +126,10 @@ def main(args):
     scope = fluid.Scope()
     with fluid.scope_guard(scope):
         with fluid.unique_name.guard():
-            model = RLUniRNN(conf, npz_config)
+            if args.model == 'UniRNN':
+                model = RLUniRNN(conf, npz_config, candidate_encode=args.candidate_encode)
+            elif args.model == 'PointerNet':
+                model = RLPointerNet(conf, npz_config, candidate_encode=args.candidate_encode)
             algorithm = RLAlgorithm(model,
                                     optimizer=conf.optimizer, lr=conf.lr,
                                     gpu_id=(0 if args.use_cuda == 1 else -1),

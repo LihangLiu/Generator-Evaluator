@@ -23,12 +23,12 @@ def add_scalar_summary(summary_writer, index, tag, value):
         summary = tf.Summary()
         summary.value.add(tag=tag, simple_value=value)
         summary_writer.add_summary(summary, index)
-    else:
-        if not exists(conf.summary_dir):
-            os.makedirs(conf.summary_dir)
-        log_file = join(conf.summary_dir, 'log_%s.txt' % args.exp)
-        with open(log_file, 'a') as f:
-            f.write("{} Step {}: {} {}\n".format(datetime.datetime.now(), index, tag, value))
+    # else:
+    #     if not exists(conf.summary_dir):
+    #         os.makedirs(conf.summary_dir)
+    #     log_file = join(conf.summary_dir, 'log_%s.txt' % args.exp)
+    #     with open(log_file, 'a') as f:
+    #         f.write("{} Step {}: {} {}\n".format(datetime.datetime.now(), index, tag, value))
 
 
 def sequence_unconcat(input_sequence, lens):

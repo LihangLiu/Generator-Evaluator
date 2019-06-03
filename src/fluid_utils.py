@@ -312,9 +312,11 @@ def fluid_get_offset(seq_len):
 def fluid_sequence_delay(input, OOV):
     """
     args:
-        input: 1-level LoDTensor
+        input.data = [1,2,3, 4,5]
+        input.lod = [[0, 3, 5]]
     return:
-        
+        output.data = [2,3,0, 5,0]
+        output.lod = [[0, 3, 5]]
     """
     seq_len = fluid_sequence_get_seq_len(input)
     zeros = layers.fill_constant_batch_size_like(seq_len, shape=[-1,1], value=0, dtype='int64')
@@ -323,6 +325,25 @@ def fluid_sequence_delay(input, OOV):
     oov.stop_gradient = True
     input_padded = layers.sequence_concat([input, oov])
     output = layers.sequence_slice(input_padded, ones, seq_len)
+    return output
+
+
+def fluid_sequence_advance(input, OOV):
+    """
+    args:
+        input.data = [1,2,3, 4,5]
+        input.lod = [[0, 3, 5]]
+    return:
+        output.data = [0,1,2, 0,4]
+        output.lod = [[0, 3, 5]]
+    """
+    seq_len = fluid_sequence_get_seq_len(input)
+    zeros = layers.fill_constant_batch_size_like(seq_len, shape=[-1,1], value=0, dtype='int64')
+    ones = layers.fill_constant_batch_size_like(seq_len, shape=[-1,1], value=1, dtype='int64')
+    oov = layers.sequence_slice(input, zeros, ones) * 0 + OOV
+    oov.stop_gradient = True
+    input_padded = layers.sequence_concat([oov, input])
+    output = layers.sequence_slice(input_padded, zeros, seq_len)
     return output
 
 
