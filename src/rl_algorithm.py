@@ -112,7 +112,7 @@ class RLAlgorithm(Algorithm):
         TODO: memory leak caused by np.array(var.get_tensor()) within _fetch_var() 
             (https://github.com/PaddlePaddle/Paddle/issues/17176)
         """
-        interval = 20
+        interval = 100
         if self._learn_cnt % interval == 0:
             self.model.sync_paras_to(self.target_model, self.gpu_id, 1.0)
         self._learn_cnt += 1
