@@ -100,6 +100,7 @@ class EvalFeedConvertor(object):
 ############
 
 def main(args):
+    print_args(args, 'args')
     conf = Config(args.exp)
 
     ### build model

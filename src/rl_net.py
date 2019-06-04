@@ -43,7 +43,7 @@ class RLUniRNN(BaseModel):
 
         self.user_feature_fc_op = default_fc(self.hidden_size, act='relu', name='user_feature_fc')
         self.item_fc_op = default_fc(self.hidden_size, act='relu', name='item_fc')
-        if not self._candidate_encode is None:
+        if self._candidate_encode:
             self.candidate_encode_fc_op = default_fc(self.hidden_size, act='relu', name='candidate_encode_fc')
 
         self.item_gru_fc_op = default_fc(self.hidden_size * 3, act='relu', name='item_gru_fc')
@@ -151,7 +151,7 @@ class RLUniRNN(BaseModel):
         pos = fluid_sequence_get_pos(item_fc)
         pos_embed = self.dict_data_embed_op['pos'](pos)
 
-        if not self._candidate_encode is None:
+        if self._candidate_encode:
             cand_encoding = self.candidate_encode(item_fc)
             init_hidden = self.candidate_encode_fc_op(layers.concat([user_feature, cand_encoding], 1))
         else:
@@ -168,7 +168,7 @@ class RLUniRNN(BaseModel):
         pos = fluid_sequence_get_pos(item_fc)
         pos_embed = self.dict_data_embed_op['pos'](pos)
 
-        if not self._candidate_encode is None:
+        if self._candidate_encode:
             cand_encoding = self.candidate_encode(item_fc)
             init_hidden = self.candidate_encode_fc_op(layers.concat([user_feature, cand_encoding], 1))
         else:

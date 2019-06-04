@@ -74,6 +74,7 @@ def get_parser():
     # model settings
     parser.add_argument('--model', type=str, choices=['DNN', 'UniRNN'], help='')
     parser.add_argument('--eval_exp', type=str, help='')
+    parser.add_argument('--eval_model', type=str, help='')
     return parser
 
 
@@ -118,6 +119,7 @@ class GenSLFeedConvertor(object):
 ############
 
 def main(args):
+    print_args(args, 'args')
     conf = Config(args.exp)
 
     ### build model
@@ -137,7 +139,7 @@ def main(args):
     # get eval model
     eval_args = copy.deepcopy(args)
     eval_args.exp = args.eval_exp
-    eval_args.model = 'BiRNN'
+    eval_args.model = args.eval_model
     eval_args.task = 'eval'
     eval_td_ct = eval_entry_func(eval_args)
 
