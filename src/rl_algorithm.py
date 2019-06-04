@@ -114,6 +114,7 @@ class RLAlgorithm(Algorithm):
         """
         interval = 100
         if self._learn_cnt % interval == 0:
+            logging.info('model sync to target_model %d' % self._learn_cnt)
             self.model.sync_paras_to(self.target_model, self.gpu_id, 1.0)
         self._learn_cnt += 1
 

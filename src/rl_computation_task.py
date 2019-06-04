@@ -121,6 +121,8 @@ class RLComputationTask(object):
 
     def train(self, list_feed_dict):
         """train"""
+        with fluid.scope_guard(self.scope):
+            self.alg.before_every_batch()
         if self.mode == 'single':
             assert len(list_feed_dict) == 1
             return executor_run_with_fetch_dict(self.train_exe, 

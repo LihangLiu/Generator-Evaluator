@@ -104,7 +104,7 @@ class RLUniRNN(BaseModel):
                 # forward
                 _, expand_scores = self.sampling_rnn_forward(expand_item_fc, expand_h_0, expand_pos_embed)
                 # reset result lod
-                expand_Q = layers.lod_reset(expand_scores, item_fc)            # lod = [0,4,7]             
+                expand_Q = layers.lod_reset(expand_scores, item_fc)            # lod = [0,4,7]
 
                 cur_step_id = layers.slice(cur_pos, axes=[0, 1], starts=[0, 0], ends=[1, 1])
                 mask = layers.cast(pos >= cur_step_id, 'float32')
@@ -209,8 +209,8 @@ class RLPointerNet(BaseModel):
         self.item_gru_op = default_drnn(self.hidden_size, name='item_gru')
         self.hidden_fc_op = default_fc(self.hidden_size, name='hidden_fc')
 
-        self.out_Q_fc1_op = default_fc(self.hidden_size, act='relu', name='out_Q_fc1')
-        self.out_Q_fc2_op = default_fc(1, act=None, name='out_Q_fc2')
+        # self.out_Q_fc1_op = default_fc(self.hidden_size, act='relu', name='out_Q_fc1')
+        # self.out_Q_fc2_op = default_fc(1, act=None, name='out_Q_fc2')
 
     def create_inputs(self, mode):
         """create layers.data here"""
