@@ -76,7 +76,8 @@ def get_parser():
     # model settings
     parser.add_argument('--model', choices=['UniRNN', 'PointerNet'], help='')
     parser.add_argument('--gamma', type=float, help='')
-    parser.add_argument('--candidate_encode', default=None, help='')
+    parser.add_argument('--candidate_encode', help='')
+    parser.add_argument('--attention_type', default='dot', help='')
     parser.add_argument('--eval_exp', type=str, help='')
     parser.add_argument('--eval_model', type=str, help='')
     return parser

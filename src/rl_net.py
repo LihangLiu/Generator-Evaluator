@@ -187,9 +187,10 @@ class RLUniRNN(BaseModel):
 class RLPointerNet(BaseModel):
     """
     """
-    def __init__(self, conf, npz_config, candidate_encode):
+    def __init__(self, conf, npz_config, candidate_encode, attention_type='dot'):
         super(RLPointerNet, self).__init__(conf, npz_config)
         self._candidate_encode = candidate_encode
+        self._attention_type = attention_type
         self._create_params()
 
     def _create_params(self):
@@ -208,6 +209,9 @@ class RLPointerNet(BaseModel):
         self.item_gru_fc_op = default_fc(self.hidden_size * 3, act='relu', name='item_gru_fc')
         self.item_gru_op = default_drnn(self.hidden_size, name='item_gru')
         self.hidden_fc_op = default_fc(self.hidden_size, name='hidden_fc')
+
+        if self._attention_type == 'concat_fc':
+            self.atten_fc_op = default_fc(1, act=None, name='atten_fc')
 
         # self.out_Q_fc1_op = default_fc(self.hidden_size, act='relu', name='out_Q_fc1')
         # self.out_Q_fc2_op = default_fc(1, act=None, name='out_Q_fc2')
@@ -244,7 +248,10 @@ class RLPointerNet(BaseModel):
         """
         expand_input = layers.sequence_expand(input, atten_items) #(batch*seq_len, dim), lod_level = 0
         expand_input = layers.lod_reset(expand_input, atten_items)    #(batch*seq_len, dim), lod_level = 1
-        atten_weights = layers.reduce_sum(expand_input * atten_items, dim=1, keep_dim=True)    #(batch*seq_len, 1), lod_level = 1
+        if self._attention_type == 'concat_fc':
+            atten_weights = self.atten_fc_op(layers.concat([expand_input, atten_items], 1))
+        elif self._attention_type == 'dot':
+            atten_weights = layers.reduce_sum(expand_input * atten_items, dim=1, keep_dim=True)    #(batch*seq_len, 1), lod_level = 1
         return atten_weights
 
     def train_rnn(self, item_fc, atten_item_fc, h_0, pos, pos_embed, output_type=''):
