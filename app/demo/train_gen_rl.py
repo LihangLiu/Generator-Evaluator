@@ -78,6 +78,7 @@ def get_parser():
     parser.add_argument('--gamma', type=float, help='')
     parser.add_argument('--candidate_encode', help='')
     parser.add_argument('--attention_type', default='dot', help='')
+    parser.add_argument('--log_reward', type=int, default=0, help='')
     parser.add_argument('--eval_exp', type=str, help='')
     parser.add_argument('--eval_model', type=str, help='')
     return parser
@@ -156,7 +157,10 @@ def main(args):
     replay_memory = collections.deque(maxlen=memory_size)
     summary_writer = tf.summary.FileWriter(conf.summary_dir)
     for epoch_id in range(td_ct.ckp_step + 1, conf.max_train_steps):
-        train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id)
+        if args.log_reward == 1:
+            log_train(td_ct, args, conf, summary_writer, replay_memory, epoch_id)
+        else:
+            train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id)
         td_ct.save_model(conf.model_dir, epoch_id)
         sampling(td_ct, eval_td_ct, args, conf, summary_writer, epoch_id)
 
@@ -191,6 +195,53 @@ def train(td_ct, eval_td_ct, args, conf, summary_writer, replay_memory, epoch_id
         reordered_batch_data2 = batch_data.get_reordered_keep_candidate(order)
         reordered_batch_data2.set_decode_len(batch_data.decode_len())
         replay_memory.append((reordered_batch_data2, reward))
+
+        ### train
+        memory_batch_data, reward = replay_memory[np.random.randint(len(replay_memory))]
+        feed_dict = GenRLFeedConvertor.train_test(memory_batch_data, reward)
+        fetch_dict = td_ct.train(feed_dict)
+
+        ### logging
+        list_reward.append(np.mean(reward))
+        list_loss.append(np.array(fetch_dict['loss']))
+        list_first_Q.append(np.mean(np.array(fetch_dict['c_Q'])[0]))
+        if batch_id % 10 == 0:
+            global_batch_id = epoch_id * guessed_batch_num + batch_id
+            add_scalar_summary(summary_writer, global_batch_id, 'train/rl_reward', np.mean(list_reward))
+            add_scalar_summary(summary_writer, global_batch_id, 'train/rl_loss', np.mean(list_loss))
+            add_scalar_summary(summary_writer, global_batch_id, 'train/rl_1st_Q', np.mean(list_first_Q))
+            list_reward = []
+            list_loss = []
+            list_first_Q = []
+
+        last_batch_data = BatchData(conf, tensor_dict)
+        batch_id += 1
+
+
+def log_train(td_ct, args, conf, summary_writer, replay_memory, epoch_id):
+    """train"""
+    dataset = NpzDataset(conf.train_npz_list, conf.npz_config_path, conf.requested_npz_names, if_random_shuffle=True)
+    data_gen = dataset.get_data_generator(conf.batch_size)
+
+    list_reward = []
+    list_loss = []
+    list_first_Q = []
+    guessed_batch_num = 11500
+    batch_id = 0
+    last_batch_data = BatchData(conf, data_gen.next())
+    for tensor_dict in data_gen:
+        ### sampling
+        batch_data = BatchData(conf, tensor_dict)
+        batch_data.set_decode_len(batch_data.seq_lens())
+        order = [np.arange(d) for d in batch_data.decode_len()]
+
+        ### get reward
+        reordered_batch_data = batch_data.get_reordered(order)
+        reordered_batch_data.set_decode_len(batch_data.decode_len())
+        reward = batch_data.tensor_dict['click_id'].values
+
+        ### save to replay_memory
+        replay_memory.append((reordered_batch_data, reward))
 
         ### train
         memory_batch_data, reward = replay_memory[np.random.randint(len(replay_memory))]
