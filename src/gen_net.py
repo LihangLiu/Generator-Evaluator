@@ -50,6 +50,8 @@ class DNN(BaseModel):
         """create layers.data here"""
         inputs = OrderedDict()
         data_attributes = copy.deepcopy(self.data_attributes)
+        data_attributes['eps'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}
+        data_attributes['eta'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}
         data_attributes['decode_len'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
         data_attributes['click_id'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
 
@@ -57,8 +59,10 @@ class DNN(BaseModel):
             list_names = self.item_slot_names + self.user_slot_names + ['click_id']
         elif mode in ['inference']:
             list_names = self.item_slot_names + self.user_slot_names
-        elif mode == 'sampling':
-            list_names = self.item_slot_names + self.user_slot_names + ['decode_len']
+        elif mode == 'eps_greedy_sampling':
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eps']
+        elif mode == 'softmax_sampling':
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eta']
         else:
             raise NotImplementedError(mode)
 
@@ -95,7 +99,7 @@ class DNN(BaseModel):
         click_prob = self.out_fc2_op(self.out_fc1_op(item_concat_fc))
         return click_prob
 
-    def sampling(self, inputs):
+    def sampling(self, inputs, sampling_type):
         decode_len = inputs['decode_len']
         user_feature = self.user_encode(inputs)
         item_embedding = self._build_embeddings(inputs, self.item_slot_names)            
@@ -103,11 +107,14 @@ class DNN(BaseModel):
         pos = fluid_sequence_get_pos(item_fc)
         pos_embed = self.dict_data_embed_op['pos'](pos)
 
+        eps = inputs['eps'] if sampling_type == 'eps_greedy' else None
+        eta = inputs['eta'] if sampling_type == 'softmax' else None
         sampled_id = self.sampling_rnn(item_fc, 
                                         h_0=user_feature, 
                                         pos_embed=pos_embed, 
                                         forward_func=self.sampling_rnn_forward, 
-                                        sampling_type='eps_greedy')
+                                        sampling_type=sampling_type,
+                                        eps=eps, eta=eta)
         sampled_id = self._cut_by_decode_len(layers.lod_reset(sampled_id, item_fc), decode_len)
         return sampled_id
 
@@ -140,6 +147,8 @@ class UniRNN(BaseModel):
         """create layers.data here"""
         inputs = OrderedDict()
         data_attributes = copy.deepcopy(self.data_attributes)
+        data_attributes['eps'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}
+        data_attributes['eta'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}
         data_attributes['decode_len'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
         data_attributes['click_id'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
 
@@ -147,8 +156,10 @@ class UniRNN(BaseModel):
             list_names = self.item_slot_names + self.user_slot_names + ['click_id']
         elif mode in ['inference']:
             list_names = self.item_slot_names + self.user_slot_names
-        elif mode == 'sampling':
-            list_names = self.item_slot_names + self.user_slot_names + ['decode_len']
+        elif mode == 'eps_greedy_sampling':
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eps']
+        elif mode == 'softmax_sampling':
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eta']
         else:
             raise NotImplementedError(mode)
 
@@ -184,7 +195,7 @@ class UniRNN(BaseModel):
         click_prob = self.out_fc2_op(self.out_fc1_op(item_gru))
         return click_prob
 
-    def sampling(self, inputs):
+    def sampling(self, inputs, sampling_type):
         decode_len = inputs['decode_len']
         user_feature = self.user_encode(inputs)
         item_embedding = self._build_embeddings(inputs, self.item_slot_names)            
@@ -192,11 +203,14 @@ class UniRNN(BaseModel):
         pos = fluid_sequence_get_pos(item_fc)
         pos_embed = self.dict_data_embed_op['pos'](pos)
 
+        eps = inputs['eps'] if sampling_type == 'eps_greedy' else None
+        eta = inputs['eta'] if sampling_type == 'softmax' else None
         sampled_id = self.sampling_rnn(item_fc, 
                                         h_0=user_feature, 
                                         pos_embed=pos_embed, 
                                         forward_func=self.sampling_rnn_forward, 
-                                        sampling_type='eps_greedy')
+                                        sampling_type=sampling_type,
+                                        eps=eps, eta=eta)
         sampled_id = self._cut_by_decode_len(layers.lod_reset(sampled_id, item_fc), decode_len)
         return sampled_id
 
