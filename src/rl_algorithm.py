@@ -98,10 +98,19 @@ class RLAlgorithm(Algorithm):
         fetch_dict['c_Q'] = c_Q
         return {'fetch_dict': fetch_dict}
 
-    def sampling(self):
+    def eps_greedy_sampling(self):
         """sampling"""
         inputs = self.model.create_inputs(mode='sampling')
-        sampled_id = self.model.sampling(inputs)
+        sampled_id = self.model.sampling(inputs, 'eps_greedy')
+
+        fetch_dict = OrderedDict()
+        fetch_dict['sampled_id'] = sampled_id
+        return {'fetch_dict': fetch_dict}
+
+    def softmax_sampling(self):
+        """sampling"""
+        inputs = self.model.create_inputs(mode='sampling')
+        sampled_id = self.model.sampling(inputs, 'softmax')
 
         fetch_dict = OrderedDict()
         fetch_dict['sampled_id'] = sampled_id

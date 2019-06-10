@@ -58,7 +58,8 @@ class RLComputationTask(object):
         self.startup_program = fluid.Program()
         self.test_program = fluid.Program()
         self.inference_program = fluid.Program()        # only consider single mode
-        self.sampling_program = fluid.Program()        # only consider single mode
+        self.eps_greedy_sampling_program = fluid.Program()        # only consider single mode
+        self.softmax_sampling_program = fluid.Program()        # only consider single mode
 
         with fluid.program_guard(self.train_program, self.startup_program):
             with fluid.unique_name.guard():
@@ -72,9 +73,13 @@ class RLComputationTask(object):
             with fluid.unique_name.guard():
                 self.inference_outputs = self.alg.inference()
 
-        with fluid.program_guard(self.sampling_program, fluid.Program()):
+        with fluid.program_guard(self.eps_greedy_sampling_program, fluid.Program()):
             with fluid.unique_name.guard():
-                self.sampling_outputs = self.alg.sampling()
+                self.eps_greedy_sampling_outputs = self.alg.eps_greedy_sampling()
+
+        with fluid.program_guard(self.softmax_sampling_program, fluid.Program()):
+            with fluid.unique_name.guard():
+                self.softmax_sampling_outputs = self.alg.softmax_sampling()
 
     def _define_executor(self, mode):
         """
@@ -164,11 +169,20 @@ class RLComputationTask(object):
                                             return_numpy=False,
                                             scope=self.scope)
 
-    def sampling(self, feed_dict):
+    def eps_greedy_sampling(self, feed_dict):
         """sampling"""
         return executor_run_with_fetch_dict(self.base_exe, 
-                                            program=self.sampling_program,
-                                            fetch_dict=self.sampling_outputs['fetch_dict'],
+                                            program=self.eps_greedy_sampling_program,
+                                            fetch_dict=self.eps_greedy_sampling_outputs['fetch_dict'],
+                                            feed=feed_dict,
+                                            return_numpy=False,
+                                            scope=self.scope)
+
+    def softmax_sampling(self, feed_dict):
+        """sampling"""
+        return executor_run_with_fetch_dict(self.base_exe, 
+                                            program=self.softmax_sampling_program,
+                                            fetch_dict=self.softmax_sampling_outputs['fetch_dict'],
                                             feed=feed_dict,
                                             return_numpy=False,
                                             scope=self.scope)

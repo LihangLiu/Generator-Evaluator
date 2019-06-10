@@ -56,7 +56,8 @@ class RLUniRNN(BaseModel):
         """create layers.data here"""
         inputs = OrderedDict()
         data_attributes = copy.deepcopy(self.data_attributes)
-        data_attributes['eps'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}
+        data_attributes['eps'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}        # for eps_greedy sampling
+        data_attributes['eta'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}        # for softmax sampling
         data_attributes['decode_len'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
         data_attributes['reward'] = {'shape': (-1, 1), 'dtype': 'float32', 'lod_level': 1}
 
@@ -65,7 +66,7 @@ class RLUniRNN(BaseModel):
         elif mode in ['inference']:
             list_names = self.item_slot_names + self.user_slot_names + ['decode_len']
         elif mode == 'sampling':
-            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eps']
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eps', 'eta']
         else:
             raise NotImplementedError(mode)
             
@@ -160,7 +161,7 @@ class RLUniRNN(BaseModel):
         item_Q = self._cut_by_decode_len(layers.lod_reset(item_Q, item_fc), decode_len)
         return item_Q
 
-    def sampling(self, inputs):
+    def sampling(self, inputs, sampling_type):
         decode_len = inputs['decode_len']
         user_feature = self.user_encode(inputs)
         item_embedding = self._build_embeddings(inputs, self.item_slot_names)            
@@ -173,12 +174,14 @@ class RLUniRNN(BaseModel):
             init_hidden = self.candidate_encode_fc_op(layers.concat([user_feature, cand_encoding], 1))
         else:
             init_hidden = user_feature
+        eps = inputs['eps'] if sampling_type == 'eps_greedy' else None
+        eta = inputs['eta'] if sampling_type == 'softmax' else None
         sampled_id = self.sampling_rnn(item_fc, 
                                         h_0=init_hidden, 
                                         pos_embed=pos_embed, 
                                         forward_func=self.sampling_rnn_forward, 
-                                        sampling_type='eps_greedy',
-                                        eps=inputs['eps'])
+                                        sampling_type=sampling_type,
+                                        eps=eps, eta=eta)
         sampled_id = self._cut_by_decode_len(layers.lod_reset(sampled_id, item_fc), decode_len)
         return sampled_id
 
@@ -221,6 +224,7 @@ class RLPointerNet(BaseModel):
         inputs = OrderedDict()
         data_attributes = copy.deepcopy(self.data_attributes)
         data_attributes['eps'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}
+        data_attributes['eta'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}
         data_attributes['decode_len'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
         data_attributes['reward'] = {'shape': (-1, 1), 'dtype': 'float32', 'lod_level': 1}
 
@@ -229,7 +233,7 @@ class RLPointerNet(BaseModel):
         elif mode in ['inference']:
             list_names = self.item_slot_names + self.user_slot_names + ['decode_len']
         elif mode == 'sampling':
-            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eps']
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eps', 'eta']
         else:
             raise NotImplementedError(mode)
             
@@ -282,7 +286,6 @@ class RLPointerNet(BaseModel):
 
                 expand_Q = self._dot_attention(hidden_fc, atten_item_fc)
 
-
                 cur_step_id = layers.slice(cur_pos, axes=[0, 1], starts=[0, 0], ends=[1, 1])
                 mask = layers.cast(pos >= cur_step_id, 'float32')
                 expand_Q = expand_Q * mask
@@ -298,7 +301,7 @@ class RLPointerNet(BaseModel):
         drnn_output = drnn()
         return drnn_output
 
-    def sampling_rnn(self, item_fc, atten_item_fc, h_0, pos_embed, sampling_type, eps=0):
+    def sampling_rnn(self, item_fc, atten_item_fc, h_0, pos_embed, sampling_type, eps=0, eta=1):
         oov_item_fc = layers.fill_constant_batch_size_like(item_fc, shape=item_fc.shape, value=0, dtype='float32')
         oov_item_fc = layers.lod_reset(oov_item_fc, h_0)
         mask = layers.reduce_sum(item_fc, dim=1, keep_dim=True) * 0 + 1
@@ -320,7 +323,8 @@ class RLPointerNet(BaseModel):
 
             if sampling_type == 'eps_greedy':
                 selected_index = self.eps_greedy_sampling(expand_Q, mask, eps=eps)
-
+            elif sampling_type == 'softmax':
+                selected_index = self.softmax_sampling(expand_Q, mask, eta=eta)
 
             drnn.output(selected_index)
 
@@ -371,7 +375,7 @@ class RLPointerNet(BaseModel):
         item_Q = self._cut_by_decode_len(layers.lod_reset(item_Q, item_fc), decode_len)
         return item_Q
 
-    def sampling(self, inputs):
+    def sampling(self, inputs, sampling_type):
         decode_len = inputs['decode_len']
         user_feature = self.user_encode(inputs)
         item_embedding = self._build_embeddings(inputs, self.item_slot_names)            
@@ -382,11 +386,13 @@ class RLPointerNet(BaseModel):
         pos_embed = self.dict_data_embed_op['pos'](pos)
 
         init_hidden = self.candidate_encode_fc_op(layers.concat([user_feature, cand_encoding], 1))
+        eps = inputs['eps'] if sampling_type == 'eps_greedy' else None
+        eta = inputs['eta'] if sampling_type == 'softmax' else None
         sampled_id = self.sampling_rnn(item_fc, 
                                         atten_item_fc,
                                         h_0=init_hidden, 
                                         pos_embed=pos_embed, 
-                                        sampling_type='eps_greedy',
-                                        eps=inputs['eps'])
+                                        sampling_type=sampling_type,
+                                        eps=eps, eta=eta)
         sampled_id = self._cut_by_decode_len(layers.lod_reset(sampled_id, item_fc), decode_len)
         return sampled_id

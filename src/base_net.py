@@ -207,6 +207,24 @@ class BaseModel(Model):
         sampled_id = layers.elementwise_min(sampled_id, max_id)
         return layers.cast(sampled_id, 'int64')
 
+    def softmax_sampling(self, scores, mask, eta):
+        scores = scores * mask
+        scores_padded = layers.squeeze(fluid_sequence_pad(scores, 0, maxlen=128), [2])  # (b*s, 1) -> (b, s, 1) -> (b, s)
+        mask_padded = layers.squeeze(fluid_sequence_pad(mask, 0, maxlen=128), [2])
+
+        def normalize(scores_padded, mask_padded):
+            mean_S = layers.reduce_sum(scores_padded, dim=1, keep_dim=True) / layers.reduce_sum(mask_padded, dim=1, keep_dim=True)
+            S = scores_padded - mean_S
+            std_S = layers.sqrt(layers.reduce_sum(layers.square(S * mask_padded), dim=1, keep_dim=True))
+            return S / (std_S + self.SAFE_EPS)
+        
+        norm_S = normalize(scores_padded, mask_padded)
+        # set mask to large negative values
+        norm_S = norm_S * mask_padded - (mask_padded*(-1) + 1) * self.BIG_VALUE
+        soft_prob = layers.softmax(norm_S / eta) * mask_padded
+        sampled_id = layers.reshape(layers.sampling_id(soft_prob), [-1, 1])
+        return layers.cast(sampled_id, 'int64')
+
     def sampling_rnn_forward(self, independent_item_fc, independent_hidden, independent_pos_embed):
         raise NotImplementedError()
 
@@ -216,7 +234,7 @@ class BaseModel(Model):
         scores = self.out_Q_fc2_op(self.out_Q_fc1_op(next_hidden))
         return next_hidden, scores
 
-    def sampling_rnn(self, item_fc, h_0, pos_embed, forward_func, sampling_type, eps=0):
+    def sampling_rnn(self, item_fc, h_0, pos_embed, forward_func, sampling_type, eps=0, eta=1):
         mask = layers.reduce_sum(item_fc, dim=1, keep_dim=True) * 0 + 1
         drnn = fluid.layers.DynamicRNN()
         with drnn.block():
@@ -242,6 +260,8 @@ class BaseModel(Model):
 
             if sampling_type == 'eps_greedy':
                 selected_index = self.eps_greedy_sampling(expand_scores, mask, eps=eps)
+            elif sampling_type == 'softmax':
+                selected_index = self.softmax_sampling(expand_scores, mask, eta=eta)
 
             drnn.output(selected_index)
 
