@@ -100,7 +100,7 @@ class RLAlgorithm(Algorithm):
 
     def eps_greedy_sampling(self):
         """sampling"""
-        inputs = self.model.create_inputs(mode='sampling')
+        inputs = self.model.create_inputs(mode='eps_greedy_sampling')
         sampled_id = self.model.sampling(inputs, 'eps_greedy')
 
         fetch_dict = OrderedDict()
@@ -109,7 +109,7 @@ class RLAlgorithm(Algorithm):
 
     def softmax_sampling(self):
         """sampling"""
-        inputs = self.model.create_inputs(mode='sampling')
+        inputs = self.model.create_inputs(mode='softmax_sampling')
         sampled_id = self.model.sampling(inputs, 'softmax')
 
         fetch_dict = OrderedDict()

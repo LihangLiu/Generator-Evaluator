@@ -56,8 +56,8 @@ class RLUniRNN(BaseModel):
         """create layers.data here"""
         inputs = OrderedDict()
         data_attributes = copy.deepcopy(self.data_attributes)
-        data_attributes['eps'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}        # for eps_greedy sampling
-        data_attributes['eta'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}        # for softmax sampling
+        data_attributes['eps'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}
+        data_attributes['eta'] = {'shape': (1,), 'dtype': 'float32', 'lod_level': 0}
         data_attributes['decode_len'] = {'shape': (-1, 1), 'dtype': 'int64', 'lod_level': 1}
         data_attributes['reward'] = {'shape': (-1, 1), 'dtype': 'float32', 'lod_level': 1}
 
@@ -65,8 +65,10 @@ class RLUniRNN(BaseModel):
             list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'reward']
         elif mode in ['inference']:
             list_names = self.item_slot_names + self.user_slot_names + ['decode_len']
-        elif mode == 'sampling':
-            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eps', 'eta']
+        elif mode == 'eps_greedy_sampling':
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eps']
+        elif mode == 'softmax_sampling':
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eta']
         else:
             raise NotImplementedError(mode)
             
@@ -232,8 +234,10 @@ class RLPointerNet(BaseModel):
             list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'reward']
         elif mode in ['inference']:
             list_names = self.item_slot_names + self.user_slot_names + ['decode_len']
-        elif mode == 'sampling':
-            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eps', 'eta']
+        elif mode == 'eps_greedy_sampling':
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eps']
+        elif mode == 'softmax_sampling':
+            list_names = self.item_slot_names + self.user_slot_names + ['decode_len', 'eta']
         else:
             raise NotImplementedError(mode)
             
