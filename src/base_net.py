@@ -211,6 +211,7 @@ class BaseModel(Model):
         scores = scores * mask
         scores_padded = layers.squeeze(fluid_sequence_pad(scores, 0, maxlen=128), [2])  # (b*s, 1) -> (b, s, 1) -> (b, s)
         mask_padded = layers.squeeze(fluid_sequence_pad(mask, 0, maxlen=128), [2])
+        seq_lens = fluid_sequence_get_seq_len(scores)
 
         def normalize(scores_padded, mask_padded):
             mean_S = layers.reduce_sum(scores_padded, dim=1, keep_dim=True) / layers.reduce_sum(mask_padded, dim=1, keep_dim=True)
@@ -223,6 +224,8 @@ class BaseModel(Model):
         norm_S = norm_S * mask_padded - (mask_padded*(-1) + 1) * self.BIG_VALUE
         soft_prob = layers.softmax(norm_S / eta) * mask_padded
         sampled_id = layers.reshape(layers.sampling_id(soft_prob), [-1, 1])
+        max_id = layers.cast(layers.cast(seq_lens, 'float32') - 1, 'int64')
+        sampled_id = layers.elementwise_min(sampled_id, max_id)
         return layers.cast(sampled_id, 'int64')
 
     def sampling_rnn_forward(self, independent_item_fc, independent_hidden, independent_pos_embed):

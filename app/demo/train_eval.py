@@ -34,7 +34,7 @@ import paddle
 from paddle import fluid
 
 from config import Config
-from utils import BatchData, add_scalar_summary
+from utils import BatchData, add_scalar_summary, sequence_unconcat
 
 import _init_paths
 
@@ -43,7 +43,7 @@ from src.eval_algorithm import EvalAlgorithm
 from src.eval_computation_task import EvalComputationTask
 
 from src.utils import (read_json, print_args, tik, tok, threaded_generator, print_once,
-                        AUCMetrics, AssertEqual)
+                        AUCMetrics, AssertEqual, SequenceRMSEMetrics)
 from src.fluid_utils import (fluid_create_lod_tensor as create_tensor, 
                             concat_list_array, seq_len_2_lod, get_num_devices)
 from data.npz_dataset import NpzDataset
@@ -161,20 +161,27 @@ def test(td_ct, args, conf, summary_writer, epoch_id):
     data_gen = dataset.get_data_generator(conf.batch_size)
 
     auc_metric = AUCMetrics()
+    seq_rmse_metric = SequenceRMSEMetrics()
     batch_id = 0
     for tensor_dict in data_gen:
         batch_data = BatchData(conf, tensor_dict)
         fetch_dict = td_ct.test(EvalFeedConvertor.train_test(batch_data))
-        auc_metric.add(labels=np.array(fetch_dict['click_id']).flatten(),
-                        y_scores=np.array(fetch_dict['click_prob'])[:, 1])
+        click_id = np.array(fetch_dict['click_id']).flatten()
+        click_prob = np.array(fetch_dict['click_prob'])[:, 1]
+        click_id_unconcat = sequence_unconcat(click_id, batch_data.seq_lens())
+        click_prob_unconcat = sequence_unconcat(click_prob, batch_data.seq_lens())
+        auc_metric.add(labels=click_id, y_scores=click_prob)
+        for sub_click_id, sub_click_prob in zip(click_id_unconcat, click_prob_unconcat):
+            seq_rmse_metric.add(labels=sub_click_id, preds=sub_click_prob)
+
         batch_id += 1
 
     add_scalar_summary(summary_writer, epoch_id, 'test/auc', auc_metric.overall_auc())
+    add_scalar_summary(summary_writer, epoch_id, 'test/seq_rmse', seq_rmse_metric.overall_rmse())
 
 
 def debug(td_ct, args, conf, summary_writer, epoch_id):
     pass
-
 
 
 if __name__ == "__main__":

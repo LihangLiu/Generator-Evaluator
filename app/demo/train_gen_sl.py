@@ -43,7 +43,7 @@ from src.gen_algorithm import GenAlgorithm
 from src.gen_computation_task import GenComputationTask
 
 from src.utils import (read_json, print_args, tik, tok, save_pickle, threaded_generator, 
-                        AUCMetrics, AssertEqual)
+                        AUCMetrics, AssertEqual, SequenceRMSEMetrics)
 from src.fluid_utils import (fluid_create_lod_tensor as create_tensor, 
                             concat_list_array, seq_len_2_lod, get_num_devices)
 from data.npz_dataset import NpzDataset
@@ -206,15 +206,22 @@ def test(td_ct, args, conf, summary_writer, epoch_id):
     data_gen = dataset.get_data_generator(conf.batch_size)
 
     auc_metric = AUCMetrics()
+    seq_rmse_metric = SequenceRMSEMetrics()
     batch_id = 0
     for tensor_dict in data_gen:
         batch_data = BatchData(conf, tensor_dict)
         fetch_dict = td_ct.test(GenSLFeedConvertor.train_test(batch_data))
-        auc_metric.add(labels=np.array(fetch_dict['click_id']).flatten(),
-                        y_scores=np.array(fetch_dict['click_prob'])[:, 1])
+        click_id = np.array(fetch_dict['click_id']).flatten()
+        click_prob = np.array(fetch_dict['click_prob'])[:, 1]
+        click_id_unconcat = sequence_unconcat(click_id, batch_data.seq_lens())
+        click_prob_unconcat = sequence_unconcat(click_prob, batch_data.seq_lens())
+        auc_metric.add(labels=click_id, y_scores=click_prob)
+        for sub_click_id, sub_click_prob in zip(click_id_unconcat, click_prob_unconcat):
+            seq_rmse_metric.add(labels=sub_click_id, preds=sub_click_prob)
         batch_id += 1
 
     add_scalar_summary(summary_writer, epoch_id, 'test/auc', auc_metric.overall_auc())
+    add_scalar_summary(summary_writer, epoch_id, 'test/seq_rmse', seq_rmse_metric.overall_rmse())
 
 
 def eps_greedy_sampling(td_ct, eval_td_ct, args, conf, summary_writer, epoch_id):
@@ -256,10 +263,10 @@ def evaluate(td_ct, eval_td_ct, args, conf, epoch_id):
     """softmax_sampling"""
     np.random.seed(0)   # IMPORTANT. To have the same candidates, since the candidates is selected by np.random.choice.
     dataset = NpzDataset(conf.test_npz_list, conf.npz_config_path, conf.requested_npz_names, if_random_shuffle=False)
-    batch_size = 500
+    batch_size = 250
     data_gen = dataset.get_data_generator(batch_size)
 
-    max_batch_id = 100
+    max_batch_id = 200
     list_n = [1, 20, 40]
     dict_reward = {'eps_greedy':[], 'softmax':{n:[] for n in list_n}}
     last_batch_data = BatchData(conf, data_gen.next())
@@ -277,17 +284,13 @@ def evaluate(td_ct, eval_td_ct, args, conf, epoch_id):
         batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
 
         ### eps_greedy_sampling
-        tik()
         fetch_dict = td_ct.eps_greedy_sampling(GenSLFeedConvertor.eps_greedy_sampling(batch_data, eps=0))
         sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
         order = sequence_unconcat(sampled_id, batch_data.decode_len())
         list_wise_reward = get_list_wise_reward(batch_data, order)
         dict_reward['eps_greedy'] += list_wise_reward   # (b,)
-        print('eps_greedy', np.mean(dict_reward['eps_greedy']))
-        tok('eps_greedy_sampling')
 
         ### softmax_sampling
-        tik()
         max_sampling_time = np.max(list_n)
         mat_list_wise_reward = []
         for i in range(max_sampling_time):
@@ -299,18 +302,21 @@ def evaluate(td_ct, eval_td_ct, args, conf, epoch_id):
         mat_list_wise_reward = np.array(mat_list_wise_reward)   # (max_sampling_time, b)
         for n in list_n:
             dict_reward['softmax'][n] += np.max(mat_list_wise_reward[:n], 0).tolist()
-            print('softmax', n, np.mean(dict_reward['softmax'][n]))
-        tok('softmax_sampling')
-        exit()
 
-        ### logging
-        list_reward.append(np.mean(reward))
+        if batch_id % 10 == 0:
+            logging.info('batch_id:%d eps_greedy %f' % (batch_id, np.mean(dict_reward['eps_greedy'])))
+            for n in list_n:
+                logging.info('batch_id:%d softmax_%d %f' % (batch_id, n, np.mean(dict_reward['softmax'][n])))
 
         if batch_id == max_batch_id:
             break
 
         last_batch_data = BatchData(conf, tensor_dict)
         batch_id += 1
+
+    logging.info('eps_greedy %f' % np.mean(dict_reward['eps_greedy']))
+    for n in list_n:
+        logging.info('softmax_%d %f' % (n, np.mean(dict_reward['softmax'][n])))
     
 
 if __name__ == "__main__":

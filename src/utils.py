@@ -208,7 +208,10 @@ class AUCMetrics(object):
         return np.array(exp_vec1d)
 
     def add(self, labels, y_scores, cuids=None, seq_lens=None):
-        """cuids and seq_lens is necessary for cuid_wise_auc"""
+        """
+        batch add
+        cuids and seq_lens is necessary for cuid_wise_auc
+        """
         AssertEqual(len(labels), len(y_scores))
         self.labels += list(labels)
         self.y_scores += list(y_scores)
@@ -278,6 +281,9 @@ class AccuracyMetrics(object):
         self.total_count = 0
 
     def add(self, labels, probs):
+        """
+        batch add
+        """
         labels = np.array(labels)
         probs = np.array(probs)
         AssertEqual(len(labels), len(probs))
@@ -317,12 +323,37 @@ class RMSEMetrics(object):
         self.total_count = 0
 
     def add(self, labels, preds):
+        """
+        batch add
+        """
         labels = np.array(labels)
         preds = np.array(preds)
         AssertEqual(labels.shape, preds.shape)
         AssertEqual(len(labels.shape), 1)
 
         self.total_mse += np.sum((labels - preds) ** 2)
+        self.total_count += len(labels)
+    
+    def overall_rmse(self):
+        return np.sqrt(self.total_mse / self.total_count)
+
+
+class SequenceRMSEMetrics(object):
+    """docstring for AccuracyMetrics"""
+    def __init__(self):
+        self.total_mse = 0.0
+        self.total_count = 0
+
+    def add(self, labels, preds):
+        """
+        add one sequence a time
+        """
+        labels = np.array(labels)
+        preds = np.array(preds)
+        AssertEqual(labels.shape, preds.shape)
+        AssertEqual(len(labels.shape), 1)
+
+        self.total_mse += (np.sum(labels) - np.sum(preds)) ** 2
         self.total_count += len(labels)
     
     def overall_rmse(self):
