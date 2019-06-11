@@ -43,7 +43,7 @@ from src.eval_algorithm import EvalAlgorithm
 from src.eval_computation_task import EvalComputationTask
 
 from src.utils import (read_json, print_args, tik, tok, threaded_generator, print_once,
-                        AUCMetrics, AssertEqual, SequenceRMSEMetrics)
+                        AUCMetrics, AssertEqual, SequenceRMSEMetrics, SequenceCorrelationMetrics)
 from src.fluid_utils import (fluid_create_lod_tensor as create_tensor, 
                             concat_list_array, seq_len_2_lod, get_num_devices)
 from data.npz_dataset import NpzDataset
@@ -162,6 +162,7 @@ def test(td_ct, args, conf, summary_writer, epoch_id):
 
     auc_metric = AUCMetrics()
     seq_rmse_metric = SequenceRMSEMetrics()
+    seq_correlation_metric = SequenceCorrelationMetrics()
     batch_id = 0
     for tensor_dict in data_gen:
         batch_data = BatchData(conf, tensor_dict)
@@ -173,11 +174,13 @@ def test(td_ct, args, conf, summary_writer, epoch_id):
         auc_metric.add(labels=click_id, y_scores=click_prob)
         for sub_click_id, sub_click_prob in zip(click_id_unconcat, click_prob_unconcat):
             seq_rmse_metric.add(labels=sub_click_id, preds=sub_click_prob)
+            seq_correlation_metric.add(labels=sub_click_id, preds=sub_click_prob)
 
         batch_id += 1
 
     add_scalar_summary(summary_writer, epoch_id, 'test/auc', auc_metric.overall_auc())
     add_scalar_summary(summary_writer, epoch_id, 'test/seq_rmse', seq_rmse_metric.overall_rmse())
+    add_scalar_summary(summary_writer, epoch_id, 'test/seq_correlation', seq_correlation_metric.overall_correlation())
 
 
 def debug(td_ct, args, conf, summary_writer, epoch_id):

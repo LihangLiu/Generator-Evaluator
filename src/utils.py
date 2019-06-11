@@ -360,6 +360,34 @@ class SequenceRMSEMetrics(object):
         return np.sqrt(self.total_mse / self.total_count)
 
 
+class SequenceCorrelationMetrics(object):
+    """docstring for AccuracyMetrics"""
+    def __init__(self):
+        self.list_x = []
+        self.list_y = []
+
+    def add(self, labels, preds):
+        """
+        add one sequence a time
+        """
+        labels = np.array(labels)
+        preds = np.array(preds)
+        AssertEqual(labels.shape, preds.shape)
+        AssertEqual(len(labels.shape), 1)
+
+        self.list_x.append(np.sum(labels))
+        self.list_y.append(np.sum(preds))
+    
+    def overall_correlation(self):
+        X = np.array(self.list_x)
+        Y = np.array(self.list_y)
+        mean_x = np.mean(X)
+        mean_y = np.mean(Y)
+        std_x = np.std(X)
+        std_y = np.std(Y)
+        return np.mean((X - mean_x) * (Y - mean_y)) / (std_x * std_y)
+
+
 class CppInputSlot(object):
     """Define format of an input feature for GR code"""
     def __init__(self, 
