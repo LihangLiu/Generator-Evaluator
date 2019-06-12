@@ -1,3 +1,4 @@
+from __future__ import print_function
 import numpy as np
 import os
 from os.path import join, dirname, exists
@@ -11,7 +12,7 @@ import tensorflow as tf
 
 import _init_paths
 
-from src.utils import tik, tok, AssertEqual
+from src.utils import tik, tok, AssertEqual, save_pickle, read_pickle
 from data.npz_dataset import FakeTensor
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s') # filename='hot_rl.log', 
@@ -237,5 +238,81 @@ class BatchData(object):
         new_order = [np.append(od, ri) for od, ri in zip(order, rest_items)]
         return self.get_reordered(new_order)
 
+
+class PatternCounter(object):
+    def __init__(self):
+        self.log_pattern_scores = {}
+        self.pattern_count = {}
+
+    def add_log_pattern(self, batch_data):
+        click_id = sequence_unconcat(batch_data.tensor_dict['click_id'].values, batch_data.decode_len())
+        layout_id = sequence_unconcat(batch_data.tensor_dict['layout_id'].values, batch_data.seq_lens())
+        for sub_click_id, sub_layout_id in zip(click_id, layout_id):
+            for i in range(len(sub_click_id) - 3):
+                p = tuple(sub_layout_id[i:i+3].flatten().tolist())
+                if p not in self.log_pattern_scores:
+                    self.log_pattern_scores[p] = []
+                self.log_pattern_scores[p].append(np.sum(sub_click_id[i:i+3]))
+
+    def add_sampled_pattern(self, method_name, batch_data, order):
+        if method_name not in self.pattern_count:
+            self.pattern_count[method_name] = {}
+
+        layout_id = sequence_unconcat(batch_data.tensor_dict['layout_id'].values, batch_data.seq_lens())
+        for sub_layout_id, sub_order in zip(layout_id, order):
+            new_layout_id = sub_layout_id[sub_order]
+            for i in range(len(new_layout_id) - 3):
+                p = tuple(new_layout_id[i:i+3].flatten().tolist())
+                if p not in self.pattern_count[method_name]:
+                    self.pattern_count[method_name][p] = 0
+                self.pattern_count[method_name][p] += 1
+
+    def get_top_patterns(self, top_n):
+        patterns = self.log_pattern_scores.keys()
+        log_count = np.array([len(self.log_pattern_scores[p]) for p in patterns])
+        log_score = np.array([np.mean(self.log_pattern_scores[p]) for p in patterns])
+        log_score *= (log_count >= 32)          # cut low frequency
+        indice = np.argsort(log_score)[::-1]
+        top_patterns = [patterns[i] for i in indice[:top_n]]
+        return top_patterns
+
+    def Print(self):
+        top_patterns = self.get_top_patterns(20)
+        
+        for method_name in sorted(self.pattern_count.keys()):
+            d = self.pattern_count[method_name]
+            total_count = float(np.sum(d.values()))
+            top_ratio = [d[p] / total_count if p in d else 0 for p in top_patterns]
+            print('==>', method_name)
+            for top_n in [3, 5, 8, 10]:
+                print(top_n, np.sum(top_ratio[:top_n]))
+
+    def print_list(self):
+        top_patterns = self.get_top_patterns(32)
+        print('top', top_patterns)
+        print('log scores', [np.mean(self.log_pattern_scores[p]) for p in top_patterns])
+
+        total_log_count = float(np.sum([len(s) for s in self.log_pattern_scores.values()]))
+        log_ratio = [len(self.log_pattern_scores[p]) / total_log_count for p in top_patterns]
+        print('log = [', ', '.join([str(r) for r in log_ratio]), ']')
+
+        for method_name in sorted(self.pattern_count.keys()):
+            if method_name not in ['eps_greedy', 'softmax_1', 'softmax_20', 'softmax_40']:
+                continue
+            d = self.pattern_count[method_name]
+            total_count = float(np.sum(d.values()))
+            top_ratio = [d[p] / total_count if p in d else 0 for p in top_patterns]
+            # print(method_name, ' '.join([str(r) for r in top_ratio]))
+            print(method_name, '= [', ', '.join([str(r) for r in top_ratio]), ']')
+
+    def save(self, filename):
+        save_dict = {'log_pattern_scores': self.log_pattern_scores, 
+                     'pattern_count': self.pattern_count}
+        save_pickle(filename, save_dict)
+
+    def load(self, filename):
+        load_dict = read_pickle(filename)
+        self.log_pattern_scores = load_dict['log_pattern_scores']
+        self.pattern_count = load_dict['pattern_count']
 
 

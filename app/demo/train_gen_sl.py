@@ -34,7 +34,7 @@ import paddle
 from paddle import fluid
 
 from config import Config
-from utils import (sequence_unconcat, BatchData, add_scalar_summary)
+from utils import (sequence_unconcat, BatchData, add_scalar_summary, PatternCounter)
 
 import _init_paths
 
@@ -272,9 +272,9 @@ def evaluate(td_ct, eval_td_ct, args, conf, epoch_id):
     max_batch_id = 200
     list_n = [1, 20, 40]
     dict_reward = {'eps_greedy':[], 'softmax':{n:[] for n in list_n}}
+    p_counter = PatternCounter()
     last_batch_data = BatchData(conf, data_gen.next())
-    batch_id = 0
-    for tensor_dict in data_gen:
+    for batch_id in range(max_batch_id):
         def get_list_wise_reward(batch_data, order):
             reordered_batch_data = batch_data.get_reordered(order)
             fetch_dict = eval_td_ct.inference(EvalFeedConvertor.inference(reordered_batch_data))
@@ -282,45 +282,65 @@ def evaluate(td_ct, eval_td_ct, args, conf, epoch_id):
             reward_unconcat = sequence_unconcat(reward, [len(od) for od in order])
             return [np.sum(rw) for rw in reward_unconcat]
 
+        def greedy_sampling(batch_data):
+            fetch_dict = td_ct.eps_greedy_sampling(GenSLFeedConvertor.eps_greedy_sampling(batch_data, eps=0))
+            sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
+            order = sequence_unconcat(sampled_id, batch_data.decode_len())
+            list_wise_reward = get_list_wise_reward(batch_data, order)      # (b,)
+            return order, list_wise_reward
+
+        def softmax_sampling(batch_data, max_sampling_time):
+            mat_list_wise_reward = []
+            mat_order = []
+            for i in range(max_sampling_time):
+                fetch_dict = td_ct.softmax_sampling(GenSLFeedConvertor.softmax_sampling(batch_data, eta=0.1))
+                sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
+                order = sequence_unconcat(sampled_id, batch_data.decode_len())
+                list_wise_reward = get_list_wise_reward(batch_data, order)
+                mat_order.append(order) 
+                mat_list_wise_reward.append(list_wise_reward)
+            mat_list_wise_reward = np.array(mat_list_wise_reward)   # (max_sampling_time, b)
+            return mat_order, mat_list_wise_reward      # (max_sampling_time, b, var_seq_len), 
+
+        tensor_dict = data_gen.next()
         batch_data = BatchData(conf, tensor_dict)
         batch_data.set_decode_len(batch_data.seq_lens())
         batch_data.expand_candidates(last_batch_data, batch_data.seq_lens())
+        p_counter.add_log_pattern(batch_data)
 
         ### eps_greedy_sampling
-        fetch_dict = td_ct.eps_greedy_sampling(GenSLFeedConvertor.eps_greedy_sampling(batch_data, eps=0))
-        sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
-        order = sequence_unconcat(sampled_id, batch_data.decode_len())
-        list_wise_reward = get_list_wise_reward(batch_data, order)
-        dict_reward['eps_greedy'] += list_wise_reward   # (b,)
+        order, list_wise_reward = greedy_sampling(batch_data)
+        dict_reward['eps_greedy'] += list_wise_reward
+        p_counter.add_sampled_pattern('eps_greedy', batch_data, order)
 
         ### softmax_sampling
         max_sampling_time = np.max(list_n)
-        mat_list_wise_reward = []
-        for i in range(max_sampling_time):
-            fetch_dict = td_ct.softmax_sampling(GenSLFeedConvertor.softmax_sampling(batch_data, eta=0.1))
-            sampled_id = np.array(fetch_dict['sampled_id']).reshape([-1])
-            order = sequence_unconcat(sampled_id, batch_data.decode_len())
-            list_wise_reward = get_list_wise_reward(batch_data, order)
-            mat_list_wise_reward.append(list_wise_reward)
-        mat_list_wise_reward = np.array(mat_list_wise_reward)   # (max_sampling_time, b)
+        mat_order, mat_list_wise_reward = softmax_sampling(batch_data, max_sampling_time)
         for n in list_n:
             dict_reward['softmax'][n] += np.max(mat_list_wise_reward[:n], 0).tolist()
+            max_indice = np.argmax(mat_list_wise_reward[:n], 0)     # (b,)
+            max_order = [mat_order[max_id][b_id] for b_id, max_id in enumerate(max_indice)]
+            p_counter.add_sampled_pattern('softmax_%d' % n, batch_data, max_order)
 
+        ### log
         if batch_id % 10 == 0:
             logging.info('batch_id:%d eps_greedy %f' % (batch_id, np.mean(dict_reward['eps_greedy'])))
             for n in list_n:
                 logging.info('batch_id:%d softmax_%d %f' % (batch_id, n, np.mean(dict_reward['softmax'][n])))
-
-        if batch_id == max_batch_id:
-            break
+            p_counter.Print()
 
         last_batch_data = BatchData(conf, tensor_dict)
-        batch_id += 1
 
-    logging.info('eps_greedy %f' % np.mean(dict_reward['eps_greedy']))
+    ### log
+    logging.info('final eps_greedy %f' % np.mean(dict_reward['eps_greedy']))
     for n in list_n:
-        logging.info('softmax_%d %f' % (n, np.mean(dict_reward['softmax'][n])))
-    
+        logging.info('final softmax_%d %f' % (n, np.mean(dict_reward['softmax'][n])))
+    p_counter.Print()
+
+    ### save
+    pickle_file = 'tmp/%s-eval_%s.pkl' % (args.exp, args.eval_model)
+    p_counter.save(pickle_file)
+
 
 if __name__ == "__main__":
     parser = get_parser()
