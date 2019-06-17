@@ -1,0 +1,6 @@
+
+export PYTHONPATH=$(pwd):$PYTHONPATH
+
+export PARL_DIR="/home/ol/liulihang/repos/PARL"
+export DATA_DIR="/home/ol/data/feed_GR/generator-evaluator"
+export OUTPUT_DIR=$(pwd)/../../../outputs/

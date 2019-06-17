@@ -1,0 +1,44 @@
+#!/bin/bash
+source ~/.bashrc
+
+cd "$(dirname "$0")"
+source ./bashrc
+
+cd ..
+
+###############
+### start running
+###############
+
+exp=`basename $0`
+task=$1
+
+export FLAGS_fraction_of_gpu_memory_to_use=0.2
+export CPU_NUM=1
+
+alias python_bin=paddle-dev-seq_pad
+
+alias mainbody="python_bin train_gen_sl.py --exp=$exp \
+        --train_mode=parallel \
+        --model=UniRNN \
+        --eval_exp=GE-eval-birnn \
+        --eval_model=BiRNN"
+
+if [ $task == "train" ]; then
+    CUDA_VISIBLE_DEVICES=0 mainbody --task=train
+fi
+
+if [ $task == "test" ]; then
+    CUDA_VISIBLE_DEVICES=2 mainbody --task=test
+fi
+
+if [ $task == "evaluate" ]; then
+    model=$2
+    if [ $model == "birnn" ]; then
+        CUDA_VISIBLE_DEVICES=1 mainbody --task=evaluate 
+    fi
+    if [ $model == "trans" ]; then
+        CUDA_VISIBLE_DEVICES=1 mainbody --task=evaluate --eval_exp=GE-eval-trans --eval_model=Trans 
+    fi
+fi
+
